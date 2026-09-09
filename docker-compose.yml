@@ -1,0 +1,176 @@
+# Energy-Transfer — local development stack.
+#
+#   docker compose up -d                        core stack (postgres, redis, api, web)
+#   docker compose --profile observability up -d  + prometheus & grafana
+#
+# Ollama is deliberately NOT a service here. Docker Desktop's VM has ~7.6 GiB
+# total; an 8B model would consume most of it. When LLM_PROVIDER=ollama, run
+# Ollama natively on the host — containers reach it via host.docker.internal.
+# The default provider (groq) needs no local model at all.
+
+name: energy-transfer
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL + TimescaleDB — the single source of truth.
+  # Relational integrity for money and settlement; hypertables for time-series.
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: timescale/timescaledb:2.17.2-pg16
+    container_name: energy-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-energy}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-energy_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-energy_transfer}
+      # Deterministic collation so ORDER BY matches between dev machines and CI.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Only executed on a fresh volume.
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+    healthcheck:
+      # Two flags matter: without -U/-d, pg_isready reports ready while the
+      # init scripts are still running, and dependents start too early.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-energy} -d ${POSTGRES_DB:-energy_transfer}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks: [energy]
+
+  # ---------------------------------------------------------------------------
+  # Redis — WebSocket fan-out, market tick scheduling, caching, rate limiting.
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7.4-alpine
+    container_name: energy-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    networks: [energy]
+
+  # ---------------------------------------------------------------------------
+  # FastAPI backend — market engine, agents, forecasting, settlement.
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+      target: development
+    container_name: energy-backend
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      # Override the .env values that assume you are outside Compose.
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-energy}:${POSTGRES_PASSWORD:-energy_dev_password}@postgres:5432/${POSTGRES_DB:-energy_transfer}
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      # Source bind-mount enables uvicorn --reload. The anonymous volume keeps
+      # the image's installed egg-info from being shadowed by the host mount.
+      - ./backend/app:/app/app
+      - ./backend/tests:/app/tests
+      - backend_venv:/app/.venv
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    extra_hosts:
+      # Lets LLM_PROVIDER=ollama reach a natively-installed Ollama on Linux too.
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/v1/health/live', timeout=3).status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks: [energy]
+
+  # ---------------------------------------------------------------------------
+  # React frontend — Vite dev server with hot reload.
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      target: development
+    container_name: energy-frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000/api/v1}
+      VITE_WS_URL: ${VITE_WS_URL:-ws://localhost:8000/api/v1/ws}
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+      - ./frontend/index.html:/app/index.html
+      # Named volume prevents the host's (possibly Windows-built) node_modules
+      # from shadowing the Linux binaries installed inside the image.
+      - frontend_node_modules:/app/node_modules
+    depends_on:
+      backend: {condition: service_started}
+    networks: [energy]
+
+  # ---------------------------------------------------------------------------
+  # Observability — opt-in, to protect the RAM budget.
+  #   docker compose --profile observability up -d
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: energy-prometheus
+    profiles: [observability]
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks: [energy]
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: energy-grafana
+    profiles: [observability]
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on: [prometheus]
+    networks: [energy]
+
+volumes:
+  postgres_data:
+  redis_data:
+  backend_venv:
+  frontend_node_modules:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  energy:
+    driver: bridge

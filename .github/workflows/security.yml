@@ -1,0 +1,54 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '17 4 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  trivy:
+    name: Trivy · vulnerabilities, secrets, misconfiguration
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan the repository
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scanners: vuln,secret,misconfig
+          severity: CRITICAL,HIGH
+          format: sarif
+          output: trivy-results.sarif
+          # Reporting is the goal here; the gate below fails the build instead,
+          # so that a SARIF file is always produced for the Security tab.
+          exit-code: '0'
+
+      - name: Upload results to the Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        # Code scanning uploads are unavailable until the feature is enabled on
+        # the repository; do not fail the whole workflow for that.
+        continue-on-error: true
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-fs
+
+      - name: Fail on CRITICAL findings
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scanners: vuln,secret
+          severity: CRITICAL
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true

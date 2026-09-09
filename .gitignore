@@ -1,0 +1,113 @@
+# ---- Secrets ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib60/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Testing / coverage
+.pytest_cache/
+.hypothesis/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+junit.xml
+
+# Type checkers / linters
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+.pytype/
+
+# ---- Node ----
+node_modules/
+.npm
+.eslintcache
+*.tsbuildinfo
+.vite/
+frontend/dist/
+frontend/coverage/
+playwright-report/
+test-results/
+blob-report/
+.playwright/
+
+# ---- Data & models ----
+# Raw datasets are large and externally sourced: fetched via scripts/, never committed.
+# Contents are ignored rather than the directories themselves, because git cannot
+# re-include a file inside an excluded directory — so .gitkeep would be lost.
+data/raw/*
+data/interim/*
+data/processed/*
+data/external/*
+!data/**/.gitkeep
+*.csv
+*.parquet
+*.h5
+*.hdf5
+!tests/**/*.csv
+models/
+*.joblib
+*.pkl
+*.onnx
+mlruns/
+
+# ---- Infrastructure ----
+.docker/
+docker-compose.override.yml
+*.tfstate
+*.tfstate.*
+.terraform/
+
+# ---- Editors ----
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+
+# ---- OS ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- Logs & scratch ----
+*.log
+logs/
+tmp/
+.scratch/

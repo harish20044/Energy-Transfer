@@ -1,0 +1,34 @@
+# Normalise line endings so Windows dev and Linux CI agree.
+* text=auto eol=lf
+
+# Scripts that must stay LF even on Windows checkouts.
+*.sh text eol=lf
+*.bash text eol=lf
+Makefile text eol=lf
+Dockerfile text eol=lf
+
+# Windows-only files keep CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary — never diff or normalise.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.pptx binary
+*.xlsx binary
+*.parquet binary
+*.joblib binary
+*.pkl binary
+*.onnx binary
+
+# Lockfiles: collapse in diffs, but still merge normally.
+package-lock.json linguist-generated=true -diff
+uv.lock linguist-generated=true -diff
+
+# Keep GitHub's language stats focused on real source.
+docs/** linguist-documentation=true

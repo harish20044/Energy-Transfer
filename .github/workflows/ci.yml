@@ -1,0 +1,190 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# A new push to the same branch makes the in-flight run obsolete.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Python 3.12, not latest: widest wheel coverage for the scientific stack.
+  PYTHON_VERSION: '3.12'
+  NODE_VERSION: '22'
+  # No API key is needed anywhere in CI — the stub provider is deterministic.
+  LLM_PROVIDER: stub
+
+jobs:
+  # ---------------------------------------------------------------------------
+  backend:
+    name: Backend · lint, types, tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Ruff · lint
+        run: ruff check app tests --output-format=github
+
+      - name: Ruff · format
+        run: ruff format --check app tests
+
+      - name: mypy · strict
+        run: mypy app
+
+      - name: pytest · with coverage gate
+        run: pytest
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: backend/coverage.xml
+          if-no-files-found: warn
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  frontend:
+    name: Frontend · lint, types, tests, build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # `npm ci` installs exactly the lockfile and fails if it is out of sync
+      # with package.json — which is what makes the build reproducible.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: Prettier
+        run: npm run format:check
+
+      - name: TypeScript
+        run: npm run typecheck
+
+      - name: Vitest · with coverage gate
+        run: npm run test:run
+
+      - name: Production build
+        run: npm run build
+
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  docker:
+    name: Docker · build images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Images are built but not pushed here; publishing happens in docker.yml
+      # only after this workflow passes on main.
+      - name: Build backend (production target)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          target: production
+          push: false
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - name: Build frontend (production target)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          target: production
+          push: false
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+  # ---------------------------------------------------------------------------
+  compose:
+    name: Stack · health check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create .env from the template
+        run: cp .env.example .env
+
+      - name: Start postgres, redis and the API
+        run: docker compose up -d --build postgres redis backend
+
+      - name: Wait for readiness
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/api/v1/health/ready; then
+              echo "" && echo "API is ready after ${attempt} attempt(s)."
+              exit 0
+            fi
+            sleep 4
+          done
+          echo "API never became ready." >&2
+          docker compose logs --no-color
+          exit 1
+
+      - name: Verify TimescaleDB extension is installed
+        run: |
+          docker compose exec -T postgres \
+            psql -U energy -d energy_transfer \
+            -c "SELECT extname FROM pg_extension WHERE extname = 'timescaledb';" \
+            | grep -q timescaledb
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
+
+  # ---------------------------------------------------------------------------
+  # Single required status check, so branch protection needs only one entry.
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+    needs: [backend, frontend, docker, compose]
+    if: always()
+    steps:
+      - name: Fail if any job did not succeed
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
+      - name: All checks passed
+        run: echo "CI passed."
