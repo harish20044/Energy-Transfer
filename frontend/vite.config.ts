@@ -26,8 +26,18 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: true,
-    // Fail the build rather than silently shipping an oversized bundle.
     chunkSizeWarningLimit: 600,
+    rollupOptions: {
+      output: {
+        // Split the two large, slow-moving dependencies into their own chunks.
+        // They change far less often than application code, so a returning
+        // visitor re-downloads only what actually changed.
+        manualChunks: {
+          react: ['react', 'react-dom', 'react-router-dom'],
+          charts: ['recharts'],
+        },
+      },
+    },
   },
 
   test: {
@@ -41,7 +51,14 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'lcov'],
       include: ['src/**/*.{ts,tsx}'],
-      exclude: ['src/main.tsx', 'src/test/**', 'src/**/*.d.ts'],
+      exclude: [
+        'src/main.tsx',
+        'src/test/**',
+        'src/**/*.d.ts',
+        // Interfaces and type aliases only — erased at runtime, so they can
+        // never be "covered" and would drag the real figure down.
+        'src/types/**',
+      ],
       thresholds: {
         lines: 80,
         functions: 80,

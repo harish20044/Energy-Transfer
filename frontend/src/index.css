@@ -1,11 +1,69 @@
 @import 'tailwindcss';
 
 @theme {
-  --font-sans:
-    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  --font-sans: 'Plus Jakarta Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Semantic energy palette. Each flow in the microgrid keeps one colour
+     everywhere it appears — diagram, chart, badge, table — so a glance at a
+     hue answers "where is this energy going?" without reading a label. */
+
+  /* Solar generation */
+  --color-solar-50: #fffbeb;
+  --color-solar-100: #fef3c7;
+  --color-solar-200: #fde68a;
+  --color-solar-500: #f59e0b;
+  --color-solar-600: #d97706;
+  --color-solar-700: #b45309;
+
+  /* Battery storage */
+  --color-battery-50: #ecfdf5;
+  --color-battery-100: #d1fae5;
+  --color-battery-200: #a7f3d0;
+  --color-battery-500: #10b981;
+  --color-battery-600: #059669;
+  --color-battery-700: #047857;
+
+  /* Peer-to-peer trade with neighbours */
+  --color-peer-50: #eef2ff;
+  --color-peer-100: #e0e7ff;
+  --color-peer-200: #c7d2fe;
+  --color-peer-500: #6366f1;
+  --color-peer-600: #4f46e5;
+  --color-peer-700: #4338ca;
+
+  /* Utility grid import */
+  --color-grid-50: #fff1f2;
+  --color-grid-100: #ffe4e6;
+  --color-grid-200: #fecdd3;
+  --color-grid-500: #f43f5e;
+  --color-grid-600: #e11d48;
+  --color-grid-700: #be123c;
 }
 
 body {
-  @apply bg-slate-50 font-sans text-slate-900 antialiased;
+  @apply bg-stone-100 font-sans text-stone-900 antialiased;
+}
+
+/* Numerals in this product are read in columns and compared tick to tick;
+   proportional figures make them jitter. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Energy moving along a path in the flow diagram. */
+@keyframes flow-dash {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+
+.flow-dash {
+  animation: flow-dash 1.1s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flow-dash {
+    animation: none;
+  }
 }
