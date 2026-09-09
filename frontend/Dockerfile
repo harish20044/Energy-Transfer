@@ -4,7 +4,7 @@
 #   production  — static bundle served by an unprivileged nginx
 
 # =============================================================================
-FROM node:22-alpine AS deps
+FROM node:26-alpine AS deps
 # =============================================================================
 
 WORKDIR /app
