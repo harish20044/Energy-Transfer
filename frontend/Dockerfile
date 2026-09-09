@@ -37,7 +37,7 @@ ENV VITE_API_BASE_URL=${VITE_API_BASE_URL} \
 RUN npm run build
 
 # =============================================================================
-FROM nginxinc/nginx-unprivileged:1.27-alpine AS production
+FROM nginxinc/nginx-unprivileged:1.31-alpine AS production
 # =============================================================================
 
 # This image already runs as uid 101; nothing in the container runs as root.
