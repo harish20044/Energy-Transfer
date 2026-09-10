@@ -124,6 +124,25 @@ docker compose up -d --build frontend
 If the dashboard shows "API unreachable", confirm CORS: the browser's origin must appear in
 `CORS_ORIGINS`.
 
+### Frontend shows stale code after adding a dependency
+
+Symptom: you install a package, but the container still fails to resolve it — or
+the browser keeps rendering the old UI.
+
+Cause: `frontend_node_modules` is a **named volume**. It deliberately shadows the
+image's `node_modules` so a Windows-built host copy cannot leak into the Linux
+container — but it also survives `--build`, so a rebuilt image's fresh
+dependencies stay hidden behind the old volume.
+
+```bash
+docker compose down
+docker volume rm energy-transfer_frontend_node_modules
+docker compose up -d --build
+```
+
+If the volume refuses to be removed as "in use", the container still exists —
+run `docker compose down` first, not just `stop`.
+
 ### Hot reload not working
 
 Bind-mounted files on Windows do not deliver inotify events into the Linux VM. Vite is already configured
