@@ -30,6 +30,52 @@ docker compose --profile observability up -d
 | Prometheus | <http://localhost:9090> |
 | Grafana | <http://localhost:3001> (admin / `GRAFANA_PASSWORD`) |
 
+## Running without Docker
+
+Docker is the recommended path and the source of truth for reproducibility, but
+the stack runs natively too — useful for debugging in an IDE, or on a machine
+where Docker is unavailable.
+
+**This works today because the P0 backend has no external dependencies.** It
+serves health, metadata and metrics without touching Postgres or Redis. That
+changes in P1, when the persistence layer lands and those two services become
+required — at which point either use Docker, or run Postgres and Redis natively
+and point `DATABASE_URL` / `REDIS_URL` at them.
+
+Two terminals.
+
+**Terminal 1 — backend** (Python 3.12 or newer; verified on 3.14):
+
+```bash
+cd backend
+python -m venv .venv
+source .venv/Scripts/activate      # Windows Git Bash
+# .venv\Scripts\activate           # PowerShell
+# source .venv/bin/activate        # macOS / Linux
+pip install -e ".[dev]"
+uvicorn app.main:app --reload --port 8000
+```
+
+**Terminal 2 — frontend** (Node 20.19+):
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Same URLs as the Docker path. The quality gates run natively too:
+
+```bash
+cd backend && ruff check app tests && mypy app && pytest
+cd frontend && npm run lint && npm run typecheck && npm run test:run
+```
+
+Note that `pyproject.toml` sets only a lower Python bound, so local development
+tracks whatever modern interpreter you have. Docker and CI both pin **3.12**,
+which is the version any result has to reproduce on — if a test passes locally
+and fails in CI, trust CI and check the interpreter first.
+
 ## Health checks
 
 **Liveness** answers "is the process alive?" and deliberately checks nothing external — a database blip

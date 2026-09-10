@@ -9,7 +9,10 @@ description = "Agentic AI-based peer-to-peer energy trading in microgrids"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Harish P" }]
-requires-python = ">=3.12,<3.13"
+# Lower bound only. Docker and CI both pin 3.12 — that is where reproducibility
+# is enforced — but a contributor should be able to run the suite on whatever
+# modern Python they already have rather than installing a second interpreter.
+requires-python = ">=3.12"
 
 # Base dependencies stay deliberately small: the API skeleton and nothing else.
 # Heavy scientific and agent libraries live in the extras below and are pulled
