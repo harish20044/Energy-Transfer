@@ -112,8 +112,17 @@ def test_stub_provider_needs_no_credentials_in_production() -> None:
     assert settings.llm_provider is LLMProvider.STUB
 
 
-def test_production_rejects_default_jwt_secret() -> None:
-    """The dev-only JWT secret must never reach a real deployment."""
+def test_production_rejects_default_jwt_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The dev-only JWT secret must never reach a real deployment.
+
+    Must not depend on the ambient environment being free of JWT_SECRET_KEY —
+    CI sets one at the job level (for the integration tests that need a real
+    database session), which would otherwise silently override the class
+    default and make this test pass for the wrong reason: not because the
+    validator caught the dev secret, but because a real one was already there.
+    """
+    monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
+
     with pytest.raises(ValidationError, match="JWT_SECRET_KEY"):
         Settings(app_env=AppEnv.PRODUCTION, debug=False, llm_provider=LLMProvider.STUB)
 
