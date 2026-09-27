@@ -45,7 +45,12 @@ def test_cors_origins_are_split_and_stripped(settings: Settings) -> None:
 
 def test_is_production_reflects_environment() -> None:
     assert Settings(app_env=AppEnv.DEVELOPMENT).is_production is False
-    assert Settings(app_env=AppEnv.PRODUCTION, debug=False).is_production is True
+    assert (
+        Settings(
+            app_env=AppEnv.PRODUCTION, debug=False, jwt_secret_key="a-real-production-secret"
+        ).is_production
+        is True
+    )
 
 
 def test_inverted_tariff_band_is_rejected() -> None:
@@ -81,13 +86,19 @@ def test_production_accepts_groq_with_a_key() -> None:
         debug=False,
         llm_provider=LLMProvider.GROQ,
         groq_api_key="gsk_test_key",
+        jwt_secret_key="a-real-production-secret",
     )
     assert settings.is_production is True
 
 
 def test_production_rejects_debug() -> None:
     with pytest.raises(ValidationError, match="DEBUG must be false"):
-        Settings(app_env=AppEnv.PRODUCTION, debug=True, llm_provider=LLMProvider.STUB)
+        Settings(
+            app_env=AppEnv.PRODUCTION,
+            debug=True,
+            llm_provider=LLMProvider.STUB,
+            jwt_secret_key="a-real-production-secret",
+        )
 
 
 def test_stub_provider_needs_no_credentials_in_production() -> None:
@@ -96,8 +107,25 @@ def test_stub_provider_needs_no_credentials_in_production() -> None:
         app_env=AppEnv.PRODUCTION,
         debug=False,
         llm_provider=LLMProvider.STUB,
+        jwt_secret_key="a-real-production-secret",
     )
     assert settings.llm_provider is LLMProvider.STUB
+
+
+def test_production_rejects_default_jwt_secret() -> None:
+    """The dev-only JWT secret must never reach a real deployment."""
+    with pytest.raises(ValidationError, match="JWT_SECRET_KEY"):
+        Settings(app_env=AppEnv.PRODUCTION, debug=False, llm_provider=LLMProvider.STUB)
+
+
+def test_production_accepts_a_real_jwt_secret() -> None:
+    settings = Settings(
+        app_env=AppEnv.PRODUCTION,
+        debug=False,
+        llm_provider=LLMProvider.STUB,
+        jwt_secret_key="a-real-production-secret",
+    )
+    assert settings.jwt_secret_key == "a-real-production-secret"
 
 
 def test_port_must_be_in_range() -> None:

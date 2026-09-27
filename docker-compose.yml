@@ -88,6 +88,8 @@ services:
       # the image's installed egg-info from being shadowed by the host mount.
       - ./backend/app:/app/app
       - ./backend/tests:/app/tests
+      - ./backend/alembic:/app/alembic
+      - ./backend/alembic.ini:/app/alembic.ini
       - backend_venv:/app/.venv
     depends_on:
       postgres: {condition: service_healthy}

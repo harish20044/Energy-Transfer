@@ -24,6 +24,9 @@ dependencies = [
     "pydantic-settings>=2.7,<3.0",
     "structlog>=24.4",
     "prometheus-client>=0.21",
+    # The linearised power-flow solver in app/domain/grid is core, not optional:
+    # no trade is settled without a feasibility check, so numpy is a hard dep.
+    "numpy>=2.1",
 ]
 
 [project.optional-dependencies]
@@ -53,11 +56,12 @@ agents = [
     "groq>=0.15",
     "httpx>=0.28",
 ]
-# Auth (P5)
+# Auth
 auth = [
     "pyjwt>=2.10",
     "argon2-cffi>=23.1",
     "python-multipart>=0.0.20",
+    "pydantic[email]>=2.10,<3.0",
 ]
 dev = [
     "pytest>=8.3",
@@ -165,6 +169,11 @@ markers = [
 branch = true
 source = ["app"]
 omit = ["app/__main__.py"]
+# SQLAlchemy's async engine bridges sync DBAPI calls through greenlet; without
+# this, coverage.py cannot see into that greenlet and silently under-reports
+# every line that runs after an `await db.execute(...)`/`db.flush()` — i.e.
+# most of the ORM-touching code in the app.
+concurrency = ["greenlet"]
 
 [tool.coverage.report]
 exclude_also = [

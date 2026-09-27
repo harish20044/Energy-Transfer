@@ -1,12 +1,21 @@
-import { CircleCheck, Zap } from 'lucide-react';
+import { CircleCheck, LogOut, Zap } from 'lucide-react';
 import { NavLink } from 'react-router-dom';
 
+import { useAuth } from '@/auth/useAuth';
 import { NAV_GROUPS } from '@/components/layout/navigation';
-import { HOUSEHOLD_LABEL, MICROGRID_NAME, livePower } from '@/data/mock';
+import { MICROGRID_NAME, livePower } from '@/data/mock';
 import { cn } from '@/lib/cn';
 import { kw, percent } from '@/lib/format';
 
+/** First letter of each of up to two words, e.g. "Harish P" -> "HP". */
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).slice(0, 2);
+  return parts.map((part) => part.charAt(0).toUpperCase()).join('') || '?';
+}
+
 export function Sidebar() {
+  const { user, logout } = useAuth();
+
   return (
     <aside className="flex w-64 shrink-0 flex-col border-r border-stone-200 bg-white">
       <div className="flex items-center gap-3 px-5 py-5">
@@ -66,16 +75,27 @@ export function Sidebar() {
         </div>
 
         <div className="flex items-center gap-2.5">
-          <span className="flex size-8 items-center justify-center rounded-full bg-peer-100 text-xs font-bold text-peer-700">
-            17
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-peer-100 text-xs font-bold text-peer-700">
+            {user !== null ? initials(user.display_name) : '?'}
           </span>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold text-stone-900">{HOUSEHOLD_LABEL}</p>
-            <p className="flex items-center gap-1 text-xs text-stone-500">
-              <CircleCheck className="size-3 text-battery-600" aria-hidden="true" />
-              Prosumer
+            <p className="truncate text-sm font-semibold text-stone-900">
+              {user?.display_name ?? 'Loading…'}
+            </p>
+            <p className="flex items-center gap-1 text-xs text-stone-500 capitalize">
+              <CircleCheck className="size-3 shrink-0 text-battery-600" aria-hidden="true" />
+              {user?.role ?? ''}
             </p>
           </div>
+          <button
+            type="button"
+            onClick={logout}
+            aria-label="Sign out"
+            title="Sign out"
+            className="flex size-8 shrink-0 items-center justify-center rounded-lg text-stone-400 transition-colors hover:bg-stone-100 hover:text-grid-600"
+          >
+            <LogOut className="size-4" aria-hidden="true" />
+          </button>
         </div>
       </div>
     </aside>

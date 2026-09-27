@@ -79,7 +79,10 @@ data/external/*
 *.h5
 *.hdf5
 !tests/**/*.csv
-models/
+# Trained-model artifacts only — anchored so this never matches a source
+# directory named `models` (e.g. backend/app/models/, the SQLAlchemy ORM
+# package, which a bare `models/` pattern silently swallowed once already).
+/models/
 *.joblib
 *.pkl
 *.onnx

@@ -82,6 +82,20 @@ class Settings(BaseSettings):
     # Use the `cors_origin_list` property to read it.
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
 
+    # --- Database & cache -----------------------------------------------------
+    database_url: str = (
+        "postgresql+asyncpg://energy:energy_dev_password@postgres:5432/energy_transfer"
+    )
+    redis_url: str = "redis://redis:6379/0"
+
+    # --- Auth -----------------------------------------------------------------
+    # This is an obviously-fake development default, not a real secret; the
+    # `_validate_production_secrets` check below rejects it in production.
+    jwt_secret_key: str = "dev_only_insecure_secret_change_before_deploying_anywhere"  # noqa: S105
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = Field(default=30, gt=0)
+    refresh_token_expire_days: int = Field(default=7, gt=0)
+
     # --- Market rules -------------------------------------------------------
     market_tick_minutes: int = Field(default=15, ge=1, le=60)
     feed_in_tariff: float = Field(default=3.00, ge=0)
@@ -162,6 +176,9 @@ class Settings(BaseSettings):
                 raise ValueError(msg)
             if self.debug:
                 msg = "DEBUG must be false in production."
+                raise ValueError(msg)
+            if self.jwt_secret_key == Settings.model_fields["jwt_secret_key"].default:
+                msg = "JWT_SECRET_KEY must be changed from its default before deploying."
                 raise ValueError(msg)
         return self
 

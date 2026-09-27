@@ -76,6 +76,7 @@ async def test_docs_are_disabled_in_production() -> None:
         debug=False,
         llm_provider=LLMProvider.STUB,
         log_format=LogFormat.JSON,
+        jwt_secret_key="a-real-production-secret",
     )
     app = create_app(production)
 
