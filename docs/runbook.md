@@ -203,6 +203,24 @@ netstat -ano | findstr :8000     # Windows
 
 Change the host-side port in `.env` (`API_PORT`, `POSTGRES_PORT`, `REDIS_PORT`).
 
+**A native PostgreSQL install is a common culprit on 5432 specifically.** Many
+dev machines have a standalone Postgres (often installed alongside pgAdmin)
+already listening on 5432. Docker's container health check still passes,
+because it runs *inside* the Docker network and never touches the host port —
+so the container looks perfectly healthy while a host-side tool like pgAdmin
+silently connects to the wrong server and gets `password authentication
+failed` for credentials that are correct, just for the other database.
+
+```bash
+netstat -ano | findstr :5432
+```
+
+Two different PIDs both `LISTENING` confirms it. Set `POSTGRES_PORT=5433` in
+`.env`, `docker compose up -d postgres` (the named volume persists — no data
+lost), and point pgAdmin at `localhost:5433` instead. The backend is
+unaffected either way: it reaches Postgres over the internal Docker network
+at `postgres:5432`, never through the host port.
+
 ### Tests pass locally but fail in CI
 
 CI runs Python 3.12 on Linux; the reference dev machine has Python 3.14 on Windows. **Docker is the
