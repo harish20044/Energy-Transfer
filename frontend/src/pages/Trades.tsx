@@ -1,20 +1,23 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Bot, ShieldCheck, TriangleAlert } from 'lucide-react';
 
+import type { Curtailment } from '@/api/simulation';
+import { fetchRecentCurtailments } from '@/api/simulation';
+import { useAuth } from '@/auth/useAuth';
 import { TradeList } from '@/components/dashboard/TradeList';
 import { Badge } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
-import { marketState, recentTrades } from '@/data/mock';
 import { inr, kwh } from '@/lib/format';
+import { FEED_IN_TARIFF, RETAIL_TARIFF } from '@/lib/tariffs';
+import { toUiTrade } from '@/lib/tradeView';
+import { useLiveData } from '@/live/useLiveData';
 import type { Trade } from '@/types/energy';
 
 /** The explanation panel that satisfies objective O7: every trade carries both a
  *  machine-readable decision record and a rationale a homeowner can read. */
 function TradeExplanation({ trade }: { trade: Trade }) {
   const isSell = trade.side === 'sell';
-  const versusGrid = isSell
-    ? trade.pricePerKwh - marketState.feedInTariff
-    : marketState.retailTariff - trade.pricePerKwh;
+  const versusGrid = isSell ? trade.pricePerKwh - FEED_IN_TARIFF : RETAIL_TARIFF - trade.pricePerKwh;
 
   return (
     <div className="flex flex-col gap-5">
@@ -54,7 +57,7 @@ function TradeExplanation({ trade }: { trade: Trade }) {
         </div>
         <div>
           <dt className="text-xs font-medium text-stone-500">Mechanism</dt>
-          <dd className="text-sm font-medium text-stone-900">Uniform price</dd>
+          <dd className="text-sm font-medium text-stone-900">Multi-round negotiation</dd>
         </div>
         <div>
           <dt className="text-xs font-medium text-stone-500">Grid check</dt>
@@ -80,21 +83,72 @@ function TradeExplanation({ trade }: { trade: Trade }) {
 }
 
 export function Trades() {
-  const [selected, setSelected] = useState<Trade>(recentTrades[0] as Trade);
+  const { accessToken } = useAuth();
+  const { household, trades, simulation } = useLiveData();
+  const [curtailments, setCurtailments] = useState<Curtailment[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (accessToken === null) return;
+    const controller = new AbortController();
+    fetchRecentCurtailments(accessToken, 100, controller.signal)
+      .then(setCurtailments)
+      .catch(() => {
+        // Curtailment annotation is a nice-to-have; the trade list still
+        // works without it.
+      });
+    return () => {
+      controller.abort();
+    };
+  }, [accessToken]);
+
+  if (household === null) {
+    return (
+      <div className="flex h-64 items-center justify-center text-sm text-stone-400">
+        Loading your household…
+      </div>
+    );
+  }
+
+  const tickMinutes = simulation?.tick_minutes ?? 15;
+  const uiTrades = trades.map((trade) => {
+    const curtailment = curtailments.find(
+      (c) =>
+        c.tick_index === trade.tick_index &&
+        c.buyer_household_id === trade.buyer_household_id &&
+        c.seller_household_id === trade.seller_household_id,
+    );
+    return toUiTrade(trade, household.id, tickMinutes, curtailment?.reason ?? null);
+  });
+  const selected = uiTrades.find((t) => t.id === selectedId) ?? uiTrades[0];
 
   return (
     <div className="mx-auto grid max-w-[1400px] grid-cols-1 gap-5 xl:grid-cols-5">
       <Card
         className="xl:col-span-3"
-        title="Today’s trades"
+        title="This household's trades"
         subtitle="Select a trade to see the reasoning behind it"
         contentClassName="p-0"
       >
-        <TradeList trades={recentTrades} selectedId={selected.id} onSelect={setSelected} />
+        {uiTrades.length > 0 && selected !== undefined ? (
+          <TradeList
+            trades={uiTrades}
+            selectedId={selected.id}
+            onSelect={(t) => {
+              setSelectedId(t.id);
+            }}
+          />
+        ) : (
+          <p className="p-5 text-sm text-stone-400">No trades settled yet — press Play.</p>
+        )}
       </Card>
 
       <Card className="xl:col-span-2" title="Decision record">
-        <TradeExplanation trade={selected} />
+        {selected !== undefined ? (
+          <TradeExplanation trade={selected} />
+        ) : (
+          <p className="text-sm text-stone-400">Nothing to show yet.</p>
+        )}
       </Card>
     </div>
   );

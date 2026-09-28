@@ -18,6 +18,7 @@ class SimulationStateOut(BaseModel):
     seconds_per_tick: float
     simulated_day: int
     simulated_hour: float
+    tick_minutes: int
     updated_at: datetime
 
 
@@ -76,3 +77,26 @@ class NegotiationRoundOut(BaseModel):
 class NegotiationTickOut(BaseModel):
     tick_index: int
     rounds: list[NegotiationRoundOut]
+
+
+class CurtailmentOut(BaseModel):
+    model_config = {"from_attributes": True}
+
+    tick_index: int
+    buyer_household_id: str
+    seller_household_id: str
+    curtailed_kwh: float
+    reason: str
+    created_at: datetime
+
+
+class FeederLineOut(BaseModel):
+    id: str
+    from_bus: str
+    to_bus: str
+    thermal_limit_kw: float
+
+
+class FeederOut(BaseModel):
+    household_ids: list[str]
+    lines: list[FeederLineOut]

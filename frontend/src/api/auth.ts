@@ -1,6 +1,8 @@
 /** Client for the backend's registration, login, refresh and profile endpoints. */
 
-import { API_BASE_URL } from '@/api/health';
+import { API_BASE_URL, ApiError } from '@/api/client';
+
+export { ApiError };
 
 export interface TokenPair {
   access_token: string;
@@ -15,18 +17,7 @@ export interface UserProfile {
   email: string;
   display_name: string;
   role: UserRole;
-}
-
-/** Raised for any non-2xx response, carrying the API's own detail message
- *  (FastAPI/Pydantic put the human-readable reason there). */
-export class ApiError extends Error {
-  constructor(
-    message: string,
-    public readonly status: number,
-  ) {
-    super(message);
-    this.name = 'ApiError';
-  }
+  household_id: string | null;
 }
 
 async function readErrorDetail(response: Response): Promise<string> {

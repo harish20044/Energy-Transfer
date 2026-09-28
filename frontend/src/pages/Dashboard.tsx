@@ -2,43 +2,91 @@ import { BatteryCharging, IndianRupee, Leaf, Sun } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 import { EnergyFlow } from '@/components/dashboard/EnergyFlow';
-import { ForecastChart } from '@/components/dashboard/ForecastChart';
+import { PowerHistoryChart } from '@/components/dashboard/PowerHistoryChart';
 import { TradeList } from '@/components/dashboard/TradeList';
 import { Badge } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
 import { StatTile } from '@/components/ui/StatTile';
-import { daySummary, marketState, recentTrades } from '@/data/mock';
-import { inr, inrWhole, kwh, percent } from '@/lib/format';
+import { ownMarketKw, tradingPartnerCount } from '@/lib/energy';
+import { inrWhole, kwh, percent } from '@/lib/format';
+import { toUiTrade } from '@/lib/tradeView';
+import { useLiveData } from '@/live/useLiveData';
 
 export function Dashboard() {
+  const { household, readings, trades, balance, simulation, loading } = useLiveData();
+
+  if (loading || household === null) {
+    return (
+      <div className="flex h-64 items-center justify-center text-sm text-stone-400">
+        Loading your household…
+      </div>
+    );
+  }
+
+  const latest = readings[0];
+  const tickMinutes = simulation?.tick_minutes ?? 15;
+  const durationH = tickMinutes / 60;
+
+  const peerKw = latest !== undefined ? ownMarketKw(trades, household.id, latest.tick_index, tickMinutes) : 0;
+  const peerCount = latest !== undefined ? tradingPartnerCount(trades, household.id, latest.tick_index) : 0;
+  const gridKw = latest !== undefined ? latest.grid_kwh / durationH : 0;
+
+  // Battery kW is derived from the change in state of charge between the two
+  // most recent readings — there is no separate "battery power" reading, the
+  // charge itself IS the evidence of how much power moved.
+  const previous = readings[1];
+  const batteryKw =
+    latest !== undefined && previous !== undefined
+      ? ((latest.battery_soc - previous.battery_soc) * household.battery_capacity_kwh) / durationH
+      : 0;
+
+  const livePower = {
+    solarKw: latest?.generation_kw ?? 0,
+    loadKw: latest?.consumption_kw ?? 0,
+    batteryKw,
+    peerKw,
+    gridKw,
+    batterySoc: (latest?.battery_soc ?? 0) * 100,
+  };
+
+  // Self-sufficiency over the fetched window: how much of this household's
+  // consumption was met without importing from the grid.
+  const totalConsumedKwh = readings.reduce((sum, r) => sum + r.consumption_kw * durationH, 0);
+  const totalImportedKwh = readings.reduce((sum, r) => sum + Math.max(0, r.grid_kwh), 0);
+  const selfSufficiency =
+    totalConsumedKwh > 0 ? Math.min(100, (1 - totalImportedKwh / totalConsumedKwh) * 100) : 100;
+  const gridAvoidedKwh = Math.max(0, totalConsumedKwh - totalImportedKwh);
+
+  const uiTrades = trades.slice(0, 5).map((t) => toUiTrade(t, household.id, tickMinutes));
+
   return (
     <div className="mx-auto flex max-w-[1400px] flex-col gap-5">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatTile
-          label="Saved today"
-          value={inrWhole(daySummary.savedInr)}
-          caption="vs. buying from the utility"
+          label="Net balance"
+          value={inrWhole(balance?.net_balance ?? 0)}
+          caption="since the last reset"
           icon={IndianRupee}
           tone="battery"
         />
         <StatTile
           label="Sold to neighbours"
-          value={kwh(daySummary.soldKwh)}
-          caption={`at ${inr(marketState.clearingInr)}/kWh now`}
+          value={kwh(balance?.total_sold_kwh ?? 0)}
+          caption={peerKw > 0 ? `${kwh(peerKw)} right now` : 'nothing this tick'}
           icon={Sun}
           tone="solar"
         />
         <StatTile
           label="Bought from neighbours"
-          value={kwh(daySummary.boughtKwh)}
-          caption="before sunrise"
+          value={kwh(balance?.total_bought_kwh ?? 0)}
+          caption={peerKw < 0 ? `${kwh(-peerKw)} right now` : 'nothing this tick'}
           icon={BatteryCharging}
           tone="peer"
         />
         <StatTile
           label="Self-sufficiency"
-          value={percent(daySummary.selfSufficiency)}
-          caption={`${kwh(daySummary.gridAvoidedKwh)} not drawn from the grid`}
+          value={percent(selfSufficiency)}
+          caption={`${kwh(gridAvoidedKwh)} not drawn from the grid`}
           icon={Leaf}
           tone="battery"
         />
@@ -48,11 +96,17 @@ export function Dashboard() {
         <Card
           className="xl:col-span-2"
           title="Energy flow"
-          subtitle="Live · updates every 15 minutes"
-          action={<Badge tone="peer">Exporting to 3 neighbours</Badge>}
+          subtitle={`Live · tick ${String(latest?.tick_index ?? 0)}`}
+          action={
+            <Badge tone="peer">
+              {peerCount === 0
+                ? 'No neighbours this tick'
+                : `Trading with ${String(peerCount)} neighbour${peerCount === 1 ? '' : 's'}`}
+            </Badge>
+          }
           contentClassName="p-2"
         >
-          <EnergyFlow />
+          <EnergyFlow livePower={livePower} peerCount={peerCount} />
         </Card>
 
         <Card
@@ -68,27 +122,19 @@ export function Dashboard() {
           }
           contentClassName="p-0"
         >
-          <TradeList trades={recentTrades} />
+          {uiTrades.length > 0 ? (
+            <TradeList trades={uiTrades} />
+          ) : (
+            <p className="p-5 text-sm text-stone-400">No trades settled yet — press Play.</p>
+          )}
         </Card>
       </div>
 
       <Card
-        title="Forecast · next 6 hours"
-        subtitle="Shaded band is the P10–P90 interval your agent bids against"
-        action={
-          <div className="flex items-center gap-4 text-xs text-stone-500">
-            <span className="flex items-center gap-1.5">
-              <span className="h-0.5 w-4 rounded bg-solar-600" />
-              Solar
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="h-0.5 w-4 rounded bg-peer-600" />
-              Your load
-            </span>
-          </div>
-        }
+        title="Recent power"
+        subtitle="Your own generation and consumption over recent ticks"
       >
-        <ForecastChart />
+        <PowerHistoryChart readings={readings} tickMinutes={tickMinutes} />
       </Card>
     </div>
   );

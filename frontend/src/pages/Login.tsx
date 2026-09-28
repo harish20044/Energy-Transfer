@@ -5,7 +5,8 @@ import { Navigate, useLocation } from 'react-router-dom';
 
 import { ApiError } from '@/api/auth';
 import { useAuth } from '@/auth/useAuth';
-import { MICROGRID_NAME } from '@/data/mock';
+
+const MICROGRID_NAME = '10-household microgrid';
 
 interface LocationState {
   from?: { pathname: string };

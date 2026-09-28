@@ -3,9 +3,12 @@ import { NavLink } from 'react-router-dom';
 
 import { useAuth } from '@/auth/useAuth';
 import { NAV_GROUPS } from '@/components/layout/navigation';
-import { MICROGRID_NAME, livePower } from '@/data/mock';
 import { cn } from '@/lib/cn';
+import { ownMarketKw } from '@/lib/energy';
 import { kw, percent } from '@/lib/format';
+import { useLiveData } from '@/live/useLiveData';
+
+const MICROGRID_NAME = '10-household microgrid';
 
 /** First letter of each of up to two words, e.g. "Harish P" -> "HP". */
 function initials(name: string): string {
@@ -15,6 +18,14 @@ function initials(name: string): string {
 
 export function Sidebar() {
   const { user, logout } = useAuth();
+  const { household, readings, trades, simulation } = useLiveData();
+
+  const latest = readings[0];
+  const exportingKw =
+    latest !== undefined && simulation !== null
+      ? Math.max(0, ownMarketKw(trades, household?.id ?? '', latest.tick_index, simulation.tick_minutes))
+      : 0;
+  const batterySocPct = latest !== undefined ? latest.battery_soc * 100 : 0;
 
   return (
     <aside className="flex w-64 shrink-0 flex-col border-r border-stone-200 bg-white">
@@ -63,13 +74,13 @@ export function Sidebar() {
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-stone-500">Exporting now</span>
             <span className="font-mono text-xs font-semibold text-peer-600 tnum">
-              {kw(livePower.peerKw)}
+              {kw(exportingKw)}
             </span>
           </div>
           <div className="mt-2 flex items-center justify-between">
             <span className="text-xs font-medium text-stone-500">Battery</span>
             <span className="font-mono text-xs font-semibold text-battery-600 tnum">
-              {percent(livePower.batterySoc)}
+              {percent(batterySocPct)}
             </span>
           </div>
         </div>

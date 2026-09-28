@@ -63,3 +63,11 @@ export function clockTime(date: Date): string {
 export function signed(value: number, format: (n: number) => string): string {
   return value > 0 ? `+${format(value)}` : format(value);
 }
+
+/** The simulated clock's fractional hour-of-day (e.g. 13.25) as 13:15. */
+export function simClock(hourOfDay: number): string {
+  const totalMinutes = Math.round(hourOfDay * 60) % (24 * 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+}

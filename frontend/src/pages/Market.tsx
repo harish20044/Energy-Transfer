@@ -1,4 +1,5 @@
-import { Clock, Gauge, Scale, TrendingUp } from 'lucide-react';
+import { Gauge, Scale, TrendingUp, Users } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   CartesianGrid,
   Line,
@@ -11,256 +12,292 @@ import {
   YAxis,
 } from 'recharts';
 
+import type { Curtailment, MarketTrade, NegotiationRound } from '@/api/simulation';
+import { fetchNegotiation, fetchRecentCurtailments, fetchRecentTrades } from '@/api/simulation';
+import { useAuth } from '@/auth/useAuth';
 import { Badge } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
 import { StatTile } from '@/components/ui/StatTile';
-import { asks, bids, marketState, priceHistory, supplyDemandCurve } from '@/data/mock';
-import { useCountdown } from '@/hooks/useCountdown';
 import { cn } from '@/lib/cn';
-import { countdown, inr, kwh } from '@/lib/format';
-import type { OrderLevel } from '@/types/energy';
+import { inr, kwh } from '@/lib/format';
+import { householdLabel } from '@/lib/household';
+import { FEED_IN_TARIFF, RETAIL_TARIFF } from '@/lib/tariffs';
+import { useLiveData } from '@/live/useLiveData';
 
-function OrderLadder({
-  levels,
-  side,
-  maxKwh,
+const AUTO_ADVANCE_MS = 1400;
+
+function OfferColumn({
+  title,
+  offers,
+  tone,
+  matchedIds,
 }: {
-  levels: OrderLevel[];
-  side: 'bid' | 'ask';
-  maxKwh: number;
+  title: string;
+  offers: { household_id: string; price: number; kwh: number }[];
+  tone: 'ask' | 'bid';
+  matchedIds: Set<string>;
 }) {
-  const isBid = side === 'bid';
-
   return (
     <div className="flex flex-col">
       <div className="flex items-center justify-between px-5 pb-2 text-[11px] font-semibold tracking-wider text-stone-400 uppercase">
-        <span>{isBid ? 'Bids · buyers' : 'Asks · sellers'}</span>
-        <span>kWh</span>
+        <span>{title}</span>
+        <span>kWh @ ₹/kWh</span>
       </div>
-      <ul>
-        {levels.map((level) => {
-          const isClearing = level.pricePerKwh === marketState.clearingInr;
-
-          return (
-            <li
-              key={level.pricePerKwh}
-              className={cn(
-                'relative flex items-center justify-between px-5 py-1.5 text-sm',
-                isClearing && 'bg-stone-900/[0.04] font-semibold',
-              )}
-            >
-              {/* Depth bar: width encodes volume resting at this price. */}
-              <span
+      {offers.length === 0 ? (
+        <p className="px-5 py-3 text-xs text-stone-400">Nobody on this side this tick.</p>
+      ) : (
+        <ul>
+          {offers.map((offer) => {
+            const matched = matchedIds.has(offer.household_id);
+            return (
+              <li
+                key={offer.household_id}
                 className={cn(
-                  'absolute inset-y-0.5 rounded',
-                  isBid ? 'left-0 bg-peer-100' : 'left-0 bg-solar-100',
-                )}
-                style={{ width: `${String((level.kwh / maxKwh) * 100)}%` }}
-                aria-hidden="true"
-              />
-              <span
-                className={cn(
-                  'relative font-mono tnum',
-                  isBid ? 'text-peer-700' : 'text-solar-700',
+                  'flex items-center justify-between px-5 py-1.5 text-sm',
+                  matched && 'bg-battery-50/60 font-semibold',
                 )}
               >
-                {inr(level.pricePerKwh)}
-              </span>
-              <span className="relative flex items-center gap-3">
-                <span className="text-xs text-stone-400">{level.households}×</span>
-                <span className="font-mono text-stone-700 tnum">{level.kwh.toFixed(1)}</span>
-              </span>
-            </li>
-          );
-        })}
-      </ul>
+                <span className="text-stone-700">{householdLabel(offer.household_id)}</span>
+                <span className="flex items-center gap-3">
+                  <span className="font-mono text-stone-500 tnum">{offer.kwh.toFixed(2)}</span>
+                  <span
+                    className={cn(
+                      'font-mono tnum',
+                      tone === 'ask' ? 'text-solar-700' : 'text-peer-700',
+                    )}
+                  >
+                    {inr(offer.price)}
+                  </span>
+                  {matched && <span className="text-[10px] font-bold text-battery-600">✓</span>}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }
 
 export function Market() {
-  const secondsLeft = useCountdown(marketState.gateClosesInSeconds);
-  const maxKwh = Math.max(...asks.map((a) => a.kwh), ...bids.map((b) => b.kwh));
+  const { accessToken } = useAuth();
+  const { simulation } = useLiveData();
+  const [rounds, setRounds] = useState<NegotiationRound[]>([]);
+  const [negotiationTick, setNegotiationTick] = useState<number | null>(null);
+  const [selectedRound, setSelectedRound] = useState(0);
+  const [autoAdvance, setAutoAdvance] = useState(true);
+  const [recentTrades, setRecentTrades] = useState<MarketTrade[]>([]);
+  const [curtailments, setCurtailments] = useState<Curtailment[]>([]);
+  const lastLoadedTick = useRef<number | null>(null);
+
+  const completedTick = simulation !== null && simulation.tick_index > 0 ? simulation.tick_index - 1 : null;
+
+  // Load the latest completed tick's negotiation exactly once per tick, not
+  // on every 1s poll — the round replay below owns its own pacing.
+  useEffect(() => {
+    if (accessToken === null || completedTick === null) return;
+    if (lastLoadedTick.current === completedTick) return;
+    lastLoadedTick.current = completedTick;
+
+    fetchNegotiation(accessToken, completedTick)
+      .then((data) => {
+        setRounds(data.rounds);
+        setNegotiationTick(data.tick_index);
+        setSelectedRound(0);
+      })
+      .catch(() => {
+        setRounds([]);
+      });
+  }, [accessToken, completedTick]);
+
+  useEffect(() => {
+    if (accessToken === null) return;
+    const controller = new AbortController();
+    fetchRecentTrades(accessToken, 60, controller.signal).then(setRecentTrades).catch(() => undefined);
+    fetchRecentCurtailments(accessToken, 20, controller.signal).then(setCurtailments).catch(() => undefined);
+    return () => {
+      controller.abort();
+    };
+  }, [accessToken, simulation?.tick_index]);
+
+  useEffect(() => {
+    if (!autoAdvance || rounds.length <= 1) return;
+    const timer = setInterval(() => {
+      setSelectedRound((round) => (round + 1) % rounds.length);
+    }, AUTO_ADVANCE_MS);
+    return () => {
+      clearInterval(timer);
+    };
+  }, [autoAdvance, rounds.length]);
+
+  const current = rounds[selectedRound];
+  const matchedIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const trade of current?.trades ?? []) {
+      ids.add(trade.seller_household_id);
+      ids.add(trade.buyer_household_id);
+    }
+    return ids;
+  }, [current]);
+
+  const thisTickTrades = recentTrades.filter((t) => t.tick_index === completedTick);
+  const matchedKwh = thisTickTrades.reduce((sum, t) => sum + t.kwh, 0);
+  const lastPrice = thisTickTrades.at(-1)?.price_per_kwh ?? null;
+  const curtailedThisTick = curtailments
+    .filter((c) => c.tick_index === completedTick)
+    .reduce((sum, c) => sum + c.curtailed_kwh, 0);
+
+  const priceHistory = recentTrades
+    .slice()
+    .reverse()
+    .map((t, i) => ({ x: i, tick: t.tick_index, price: t.price_per_kwh }));
 
   return (
     <div className="mx-auto flex max-w-[1400px] flex-col gap-5">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatTile
-          label="Clearing price"
-          value={inr(marketState.clearingInr)}
-          caption={`between ₹${marketState.feedInTariff.toFixed(2)} and ₹${marketState.retailTariff.toFixed(2)}`}
+          label="Last clearing price"
+          value={lastPrice !== null ? inr(lastPrice) : '—'}
+          caption={`between ₹${FEED_IN_TARIFF.toFixed(2)} and ₹${RETAIL_TARIFF.toFixed(2)}`}
           icon={TrendingUp}
           tone="peer"
         />
         <StatTile
-          label="Matched volume"
-          value={kwh(marketState.matchedKwh)}
-          caption={`${String(marketState.participants)} households in the market`}
+          label="Matched this tick"
+          value={kwh(matchedKwh)}
+          caption={negotiationTick !== null ? `Tick ${String(negotiationTick)}` : 'Waiting for a tick'}
           icon={Scale}
           tone="battery"
         />
         <StatTile
-          label="Gate closes in"
-          value={countdown(secondsLeft)}
-          caption={`Tick #${String(marketState.tickNumber)} today`}
-          icon={Clock}
+          label="Negotiating"
+          value={String((current?.asks.length ?? 0) + (current?.bids.length ?? 0))}
+          caption={`${String(current?.asks.length ?? 0)} sellers · ${String(current?.bids.length ?? 0)} buyers`}
+          icon={Users}
           tone="neutral"
         />
         <StatTile
           label="Curtailed by safety"
-          value={kwh(marketState.curtailedKwh)}
-          caption="line 7→8 at 91% loading"
+          value={kwh(curtailedThisTick)}
+          caption="grid safety veto, this tick"
           icon={Gauge}
           tone="grid"
         />
       </div>
 
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
-        <Card
-          className="xl:col-span-2"
-          title="Clearing price"
-          subtitle="Bounded to the tariff band, so both sides beat the utility"
-          action={<Badge tone="peer">{marketState.mechanism}</Badge>}
-        >
-          <div className="h-[260px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={priceHistory} margin={{ top: 8, right: 8, bottom: 0, left: -20 }}>
-                {/* The band between feed-in and retail is the whole value proposition:
-                    any price inside it leaves buyer and seller better off than the grid. */}
-                <ReferenceArea
-                  y1={marketState.feedInTariff}
-                  y2={marketState.retailTariff}
-                  fill="#6366f1"
-                  fillOpacity={0.05}
-                />
-                <ReferenceLine
-                  y={marketState.retailTariff}
-                  stroke="#e11d48"
-                  strokeDasharray="4 4"
-                  label={{
-                    value: 'Retail ₹8.00',
-                    position: 'insideTopRight',
-                    fontSize: 11,
-                    fill: '#e11d48',
-                  }}
-                />
-                <ReferenceLine
-                  y={marketState.feedInTariff}
-                  stroke="#059669"
-                  strokeDasharray="4 4"
-                  label={{
-                    value: 'Feed-in ₹3.00',
-                    position: 'insideBottomRight',
-                    fontSize: 11,
-                    fill: '#059669',
-                  }}
-                />
-                <CartesianGrid stroke="#e7e5e4" strokeDasharray="3 3" vertical={false} />
-                <XAxis
-                  dataKey="time"
-                  interval={3}
-                  tick={{ fontSize: 11, fill: '#78716c' }}
-                  tickLine={false}
-                  axisLine={{ stroke: '#e7e5e4' }}
-                />
-                <YAxis
-                  domain={[2.5, 8.5]}
-                  tick={{ fontSize: 11, fill: '#78716c' }}
-                  tickLine={false}
-                  axisLine={false}
-                  width={48}
-                />
-                <Tooltip
-                  contentStyle={{
-                    borderRadius: 8,
-                    border: '1px solid #e7e5e4',
-                    fontSize: 12,
-                  }}
-                  formatter={(value: unknown) => [inr(Number(value)), 'Clearing']}
-                />
-                <Line
-                  dataKey="clearingInr"
-                  stroke="#4f46e5"
-                  strokeWidth={2.5}
-                  dot={false}
-                  isAnimationActive={false}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
-
-        <Card
-          title="Order book"
-          subtitle={`Crosses at ${inr(marketState.clearingInr)} · ${kwh(marketState.matchedKwh)}`}
-          contentClassName="p-0 py-4"
-        >
-          <div className="flex flex-col gap-5">
-            <OrderLadder levels={[...asks].reverse()} side="ask" maxKwh={maxKwh} />
-            <div className="mx-5 flex items-center justify-between rounded-lg bg-stone-900 px-3 py-2 text-white">
-              <span className="text-xs font-medium text-stone-300">Clears at</span>
-              <span className="font-mono text-sm font-bold tnum">
-                {inr(marketState.clearingInr)}
-              </span>
+      <Card
+        title="Watch them negotiate"
+        subtitle="Round 0 opens at each side's most favourable price; each round after, both sides concede toward their reservation price"
+        action={
+          rounds.length > 0 ? (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setAutoAdvance((v) => !v);
+                }}
+                className={cn(
+                  'rounded-lg px-2.5 py-1 text-xs font-semibold',
+                  autoAdvance ? 'bg-stone-900 text-white' : 'border border-stone-200 text-stone-600',
+                )}
+              >
+                {autoAdvance ? 'Auto-playing' : 'Paused'}
+              </button>
             </div>
-            <OrderLadder levels={bids} side="bid" maxKwh={maxKwh} />
+          ) : undefined
+        }
+      >
+        {rounds.length === 0 ? (
+          <p className="py-8 text-center text-sm text-stone-400">
+            No trading activity yet this tick — press Play or Step on a tick with real surplus or
+            shortfall.
+          </p>
+        ) : (
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-wrap gap-1.5">
+              {rounds.map((round) => (
+                <button
+                  key={round.round_index}
+                  type="button"
+                  onClick={() => {
+                    setAutoAdvance(false);
+                    setSelectedRound(round.round_index);
+                  }}
+                  className={cn(
+                    'rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors',
+                    round.round_index === selectedRound
+                      ? 'bg-peer-600 text-white'
+                      : 'bg-stone-100 text-stone-600 hover:bg-stone-200',
+                    round.trades.length > 0 && round.round_index !== selectedRound && 'ring-2 ring-battery-300',
+                  )}
+                >
+                  Round {round.round_index + 1}
+                  {round.trades.length > 0 ? ` · ${String(round.trades.length)} matched` : ''}
+                </button>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+              <OfferColumn title="Asks · sellers" offers={current?.asks ?? []} tone="ask" matchedIds={matchedIds} />
+              <OfferColumn title="Bids · buyers" offers={current?.bids ?? []} tone="bid" matchedIds={matchedIds} />
+            </div>
+
+            {current !== undefined && current.trades.length > 0 && (
+              <div className="rounded-lg bg-stone-900 px-4 py-3">
+                <p className="text-xs font-semibold text-stone-300">Matched this round</p>
+                <ul className="mt-1.5 flex flex-col gap-1">
+                  {current.trades.map((trade, i) => (
+                    <li key={i} className="flex items-center justify-between text-sm text-white">
+                      <span>
+                        {householdLabel(trade.seller_household_id)} → {householdLabel(trade.buyer_household_id)}
+                      </span>
+                      <span className="font-mono tnum">
+                        {trade.kwh.toFixed(2)} kWh @ {inr(trade.price_per_kwh)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
-        </Card>
-      </div>
+        )}
+      </Card>
 
       <Card
-        title="Supply and demand"
-        subtitle="Where the curves cross is the clearing price — every trade to the left of it is mutually beneficial"
+        title="Recent clearing prices"
+        subtitle="Every settled trade across the whole feeder — no two trades have to settle at the same price anymore"
+        action={<Badge tone="peer">Multi-round negotiation</Badge>}
       >
-        <div className="h-[280px] w-full">
+        <div className="h-[240px] w-full">
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart
-              data={supplyDemandCurve}
-              margin={{ top: 8, right: 16, bottom: 4, left: -20 }}
-            >
-              <CartesianGrid stroke="#e7e5e4" strokeDasharray="3 3" />
+            <LineChart data={priceHistory} margin={{ top: 8, right: 8, bottom: 0, left: -20 }}>
+              <ReferenceArea y1={FEED_IN_TARIFF} y2={RETAIL_TARIFF} fill="#6366f1" fillOpacity={0.05} />
+              <ReferenceLine
+                y={RETAIL_TARIFF}
+                stroke="#e11d48"
+                strokeDasharray="4 4"
+                label={{ value: `Retail ₹${RETAIL_TARIFF.toFixed(2)}`, position: 'insideTopRight', fontSize: 11, fill: '#e11d48' }}
+              />
+              <ReferenceLine
+                y={FEED_IN_TARIFF}
+                stroke="#059669"
+                strokeDasharray="4 4"
+                label={{ value: `Feed-in ₹${FEED_IN_TARIFF.toFixed(2)}`, position: 'insideBottomRight', fontSize: 11, fill: '#059669' }}
+              />
+              <CartesianGrid stroke="#e7e5e4" strokeDasharray="3 3" vertical={false} />
               <XAxis
-                dataKey="price"
-                type="number"
-                domain={[3, 8]}
+                dataKey="tick"
                 tick={{ fontSize: 11, fill: '#78716c' }}
                 tickLine={false}
                 axisLine={{ stroke: '#e7e5e4' }}
-                tickFormatter={(value: number) => `₹${value.toFixed(1)}`}
               />
-              <YAxis
-                tick={{ fontSize: 11, fill: '#78716c' }}
-                tickLine={false}
-                axisLine={false}
-                width={48}
-                unit=" kWh"
-              />
-              <ReferenceLine
-                x={marketState.clearingInr}
-                stroke="#1c1917"
-                strokeDasharray="4 4"
-                label={{ value: 'Clears ₹5.40', position: 'top', fontSize: 11, fill: '#1c1917' }}
-              />
+              <YAxis domain={[2.5, 8.5]} tick={{ fontSize: 11, fill: '#78716c' }} tickLine={false} axisLine={false} width={48} />
               <Tooltip
                 contentStyle={{ borderRadius: 8, border: '1px solid #e7e5e4', fontSize: 12 }}
-                labelFormatter={(value: unknown) => `Price ₹${Number(value).toFixed(2)}`}
+                formatter={(value: unknown) => [inr(Number(value)), 'Price']}
+                labelFormatter={(value: unknown) => `Tick ${String(value)}`}
               />
-              <Line
-                dataKey="supply"
-                stroke="#d97706"
-                strokeWidth={2.5}
-                dot={{ r: 3 }}
-                name="Cumulative supply"
-                isAnimationActive={false}
-              />
-              <Line
-                dataKey="demand"
-                stroke="#4f46e5"
-                strokeWidth={2.5}
-                dot={{ r: 3 }}
-                name="Cumulative demand"
-                isAnimationActive={false}
-              />
+              <Line dataKey="price" stroke="#4f46e5" strokeWidth={2} dot={{ r: 2 }} isAnimationActive={false} />
             </LineChart>
           </ResponsiveContainer>
         </div>

@@ -1,9 +1,9 @@
 import { BatteryCharging, House, Sun, Users, Zap } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
-import { livePower } from '@/data/mock';
 import { cn } from '@/lib/cn';
 import { kw, percent } from '@/lib/format';
+import type { LivePower } from '@/types/energy';
 
 /**
  * Where this household's energy is going, right now.
@@ -115,8 +115,9 @@ function FlowPath({ d, color, active }: FlowPathProps) {
   );
 }
 
-export function EnergyFlow() {
+export function EnergyFlow({ livePower, peerCount }: { livePower: LivePower; peerCount: number }) {
   const importingFromGrid = livePower.gridKw > 0;
+  const exportingToPeers = livePower.peerKw > 0;
 
   return (
     <div className="relative h-[380px] w-full">
@@ -167,8 +168,8 @@ export function EnergyFlow() {
         top="50%"
         icon={BatteryCharging}
         label="Battery"
-        value={kw(livePower.batteryKw)}
-        caption={`charging · ${percent(livePower.batterySoc)}`}
+        value={kw(Math.abs(livePower.batteryKw))}
+        caption={`${livePower.batteryKw > 0 ? 'charging' : livePower.batteryKw < 0 ? 'discharging' : 'idle'} · ${percent(livePower.batterySoc)}`}
         tone="battery"
       />
       <FlowNode
@@ -176,8 +177,12 @@ export function EnergyFlow() {
         top="33.7%"
         icon={Users}
         label="Neighbours"
-        value={kw(livePower.peerKw)}
-        caption="selling to 3"
+        value={kw(Math.abs(livePower.peerKw))}
+        caption={
+          peerCount === 0
+            ? 'none this tick'
+            : `${exportingToPeers ? 'selling to' : 'buying from'} ${String(peerCount)}`
+        }
         tone="peer"
       />
       <FlowNode
@@ -185,7 +190,7 @@ export function EnergyFlow() {
         top="70.5%"
         icon={Zap}
         label="Utility grid"
-        value={kw(livePower.gridKw)}
+        value={kw(Math.abs(livePower.gridKw))}
         caption={importingFromGrid ? 'importing' : 'not needed'}
         tone="grid"
         idle={!importingFromGrid}

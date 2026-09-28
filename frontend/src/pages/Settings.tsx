@@ -1,9 +1,13 @@
 import { BatteryCharging, Bot, Scale } from 'lucide-react';
+import { useState } from 'react';
 
+import { updateEveningReserve } from '@/api/household';
+import { useAuth } from '@/auth/useAuth';
 import { Badge } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
-import { marketState } from '@/data/mock';
-import { inr } from '@/lib/format';
+import { inr, kw, kwh } from '@/lib/format';
+import { FEED_IN_TARIFF, RETAIL_TARIFF } from '@/lib/tariffs';
+import { useLiveData } from '@/live/useLiveData';
 
 interface PreferenceRowProps {
   label: string;
@@ -24,6 +28,33 @@ function PreferenceRow({ label, description, value }: PreferenceRowProps) {
 }
 
 export function Settings() {
+  const { accessToken } = useAuth();
+  const { household, refreshHousehold } = useLiveData();
+  const [saving, setSaving] = useState(false);
+  const [draftReserve, setDraftReserve] = useState<number | null>(null);
+
+  if (household === null) {
+    return (
+      <div className="flex h-64 items-center justify-center text-sm text-stone-400">
+        Loading your household…
+      </div>
+    );
+  }
+
+  const reservePct = draftReserve ?? Math.round(household.evening_reserve * 100);
+
+  async function commitReserve(pct: number): Promise<void> {
+    if (accessToken === null) return;
+    setSaving(true);
+    try {
+      await updateEveningReserve(accessToken, pct / 100);
+      refreshHousehold();
+    } finally {
+      setSaving(false);
+      setDraftReserve(null);
+    }
+  }
+
   return (
     <div className="mx-auto grid max-w-[1400px] grid-cols-1 gap-5 xl:grid-cols-2">
       <Card
@@ -32,25 +63,46 @@ export function Settings() {
         action={
           <Badge tone="battery">
             <BatteryCharging className="size-3.5" aria-hidden="true" />
-            Active
+            {household.battery_capacity_kwh > 0 ? 'Active' : 'No battery'}
           </Badge>
         }
         contentClassName="px-5 py-1"
       >
+        <div className="flex items-center justify-between gap-6 border-b border-stone-100 py-3.5">
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-stone-900">Evening reserve</p>
+            <p className="mt-0.5 text-xs text-stone-500">
+              Charge held back once the sun goes down, never sold before then — read by your
+              agent on every tick.
+            </p>
+            <input
+              type="range"
+              min={0}
+              max={90}
+              step={5}
+              value={reservePct}
+              disabled={saving || household.battery_capacity_kwh <= 0}
+              onChange={(e) => {
+                setDraftReserve(Number(e.target.value));
+              }}
+              onMouseUp={(e) => void commitReserve(Number(e.currentTarget.value))}
+              onTouchEnd={(e) => void commitReserve(Number(e.currentTarget.value))}
+              className="mt-3 w-full accent-battery-600 disabled:opacity-50"
+            />
+          </div>
+          <span className="shrink-0 font-mono text-sm font-semibold text-stone-900 tnum">
+            {reservePct}%
+          </span>
+        </div>
         <PreferenceRow
-          label="Evening reserve"
-          description="Charge held back for the 18:00–22:00 peak, never sold before it"
-          value="40%"
+          label="Battery capacity"
+          description="Total usable storage on this household's inverter"
+          value={kwh(household.battery_capacity_kwh)}
         />
         <PreferenceRow
-          label="Maximum depth of discharge"
-          description="Protects cell life by limiting how far the battery is drained"
-          value="80%"
-        />
-        <PreferenceRow
-          label="Charge from neighbours"
-          description="Buy peer energy when it is cheaper than the retail tariff"
-          value="Enabled"
+          label="Max charge / discharge rate"
+          description="How fast the battery can absorb surplus or deliver stored energy"
+          value={`${kw(household.battery_max_charge_kw)} / ${kw(household.battery_max_discharge_kw)}`}
         />
       </Card>
 
@@ -68,17 +120,22 @@ export function Settings() {
         <PreferenceRow
           label="Minimum sale price"
           description="Your agent never sells below this, so a trade always beats exporting"
-          value={`${inr(marketState.feedInTariff)}/kWh`}
+          value={`${inr(FEED_IN_TARIFF)}/kWh`}
         />
         <PreferenceRow
           label="Maximum purchase price"
           description="Your agent never pays more than the utility would charge"
-          value={`${inr(marketState.retailTariff)}/kWh`}
+          value={`${inr(RETAIL_TARIFF)}/kWh`}
         />
         <PreferenceRow
-          label="Risk posture"
-          description="Sells against the P10 forecast, so surplus is never over-promised"
-          value="Conservative"
+          label="Household size"
+          description="Scales how much this household typically consumes"
+          value={`${String(household.member_count)} member${household.member_count === 1 ? '' : 's'}`}
+        />
+        <PreferenceRow
+          label="Rooftop solar capacity"
+          description="Installed generation capacity used to simulate this household's output"
+          value={household.solar_capacity_kwp > 0 ? `${household.solar_capacity_kwp.toFixed(1)} kWp` : 'None'}
         />
       </Card>
 
@@ -96,18 +153,18 @@ export function Settings() {
       >
         <PreferenceRow
           label="Clearing mechanism"
-          description="All matched pairs trade at one price, set where supply crosses demand"
-          value={marketState.mechanism}
+          description="Multi-round negotiation: each side concedes toward its reservation price until it crosses"
+          value="Negotiated uniform price"
         />
         <PreferenceRow
           label="Tick length"
-          description="How often the market gate closes and clears"
+          description="How much simulated time one tick represents"
           value="15 minutes"
         />
         <PreferenceRow
           label="Grid safety"
-          description="Every allocation is checked against thermal, transformer and voltage limits"
-          value="IEEE 33-bus"
+          description="Every allocation is checked against thermal and voltage limits before it settles"
+          value="Linearized DistFlow"
         />
       </Card>
     </div>

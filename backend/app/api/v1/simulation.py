@@ -13,6 +13,7 @@ from fastapi import APIRouter, Query
 from sqlalchemy import delete, select, update
 
 from app.api.deps import CurrentUserDep, DbDep, SettingsDep
+from app.domain.grid.network import default_feeder
 from app.engine.runner import advance_one_tick, get_or_create_state, touch
 from app.models.household import Household
 from app.models.simulation import (
@@ -24,6 +25,9 @@ from app.models.simulation import (
     TradeRecord,
 )
 from app.schemas.simulation import (
+    CurtailmentOut,
+    FeederLineOut,
+    FeederOut,
     NegotiationOfferOut,
     NegotiationRoundOut,
     NegotiationTickOut,
@@ -44,6 +48,7 @@ def _to_out(state: SimulationState, *, tick_minutes: int) -> SimulationStateOut:
         seconds_per_tick=state.seconds_per_tick,
         simulated_day=day_index(state.tick_index, tick_minutes=tick_minutes),
         simulated_hour=hour_of_day(state.tick_index, tick_minutes=tick_minutes),
+        tick_minutes=tick_minutes,
         updated_at=state.updated_at,
     )
 
@@ -104,6 +109,55 @@ async def read_negotiation(
     ]
 
     return NegotiationTickOut(tick_index=tick_index, rounds=rounds)
+
+
+@router.get("/trades", response_model=list[TradeOut])
+async def read_recent_trades(
+    _current_user: CurrentUserDep,
+    db: DbDep,
+    limit: int = Query(default=50, ge=1, le=1000),
+) -> list[TradeRecord]:
+    """Every household's trades, most recent first — the same order-book
+    transparency a real exchange's public trade tape has."""
+    rows = await db.scalars(
+        select(TradeRecord).order_by(TradeRecord.id.desc()).limit(limit)
+    )
+    return list(rows)
+
+
+@router.get("/curtailments", response_model=list[CurtailmentOut])
+async def read_recent_curtailments(
+    _current_user: CurrentUserDep,
+    db: DbDep,
+    limit: int = Query(default=50, ge=1, le=1000),
+) -> list[CurtailmentRecord]:
+    """Every trade the grid safety layer has had to cut back, most recent
+    first — the evidence for objective O4."""
+    rows = await db.scalars(
+        select(CurtailmentRecord).order_by(CurtailmentRecord.id.desc()).limit(limit)
+    )
+    return list(rows)
+
+
+@router.get("/network", response_model=FeederOut)
+async def read_network(_current_user: CurrentUserDep, db: DbDep) -> FeederOut:
+    """The feeder topology every household trades over — static for the life
+    of the demo, so the frontend only needs to fetch it once."""
+    households = await db.scalars(select(Household).order_by(Household.id))
+    household_ids = sorted((h.id for h in households), key=lambda hid: int(hid[1:]))
+    network = default_feeder(household_ids)
+    return FeederOut(
+        household_ids=household_ids,
+        lines=[
+            FeederLineOut(
+                id=line.id,
+                from_bus=line.from_bus,
+                to_bus=line.to_bus,
+                thermal_limit_kw=line.thermal_limit_kw,
+            )
+            for line in network.lines
+        ],
+    )
 
 
 @router.post("/play", response_model=SimulationStateOut)

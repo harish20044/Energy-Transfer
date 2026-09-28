@@ -1,12 +1,10 @@
 import { Bell } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
 
+import { SimulationControls } from '@/components/layout/SimulationControls';
 import { PAGE_META } from '@/components/layout/navigation';
-import { marketState } from '@/data/mock';
 import { useApiHealth } from '@/hooks/useApiHealth';
-import { useCountdown } from '@/hooks/useCountdown';
 import { cn } from '@/lib/cn';
-import { countdown, inr } from '@/lib/format';
 
 const API_LABELS = {
   checking: 'Connecting',
@@ -23,7 +21,6 @@ const API_DOTS = {
 export function TopBar() {
   const { pathname } = useLocation();
   const meta = PAGE_META[pathname] ?? PAGE_META['/'];
-  const secondsLeft = useCountdown(marketState.gateClosesInSeconds);
   const apiHealth = useApiHealth();
 
   return (
@@ -44,22 +41,7 @@ export function TopBar() {
           <span className="text-xs font-medium text-stone-600">{API_LABELS[apiHealth]}</span>
         </div>
 
-        <div className="hidden items-center gap-2 rounded-lg border border-stone-200 px-3 py-1.5 lg:flex">
-          <span className="text-xs font-medium text-stone-500">Clearing price</span>
-          <span className="font-mono text-sm font-semibold text-stone-900 tnum">
-            {inr(marketState.clearingInr)}
-          </span>
-          <span className="text-xs text-stone-400">/kWh</span>
-        </div>
-
-        <div className="flex items-center gap-2 rounded-lg bg-stone-900 px-3 py-1.5 text-white">
-          <span className="relative flex size-2">
-            <span className="absolute inline-flex size-2 animate-ping rounded-full bg-battery-500 opacity-75" />
-            <span className="relative inline-flex size-2 rounded-full bg-battery-500" />
-          </span>
-          <span className="text-xs font-medium text-stone-300">Gate closes</span>
-          <span className="font-mono text-sm font-semibold tnum">{countdown(secondsLeft)}</span>
-        </div>
+        <SimulationControls />
 
         <button
           type="button"
@@ -67,7 +49,6 @@ export function TopBar() {
           className="relative flex size-9 items-center justify-center rounded-lg border border-stone-200 text-stone-600 transition-colors hover:bg-stone-100 hover:text-stone-900"
         >
           <Bell className="size-[18px]" aria-hidden="true" />
-          <span className="absolute top-2 right-2 size-1.5 rounded-full bg-grid-500" />
         </button>
       </div>
     </header>
