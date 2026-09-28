@@ -105,3 +105,30 @@ def test_no_trades_is_trivially_safe() -> None:
     assert result.resolved is True
     assert result.curtailments == ()
     assert result.trades == ()
+
+
+def test_curtailment_still_resolves_when_every_trade_is_internal_to_one_lateral() -> None:
+    """Hypothesis-found regression: four trades entirely among h1/h4/h10 (all
+    on the same lateral) can overload line h1->h4 and sag h10's voltage even
+    though the lateral's net flow with the substation is exactly zero —
+    every kWh is just being redistributed internally. Curtailment must still
+    find a real boundary-crossing trade to cut, not get stuck repeatedly
+    'fixing' a trade that never contributed to the violation in the first
+    place (an internal trade between two households already both inside the
+    overloaded subtree changes nothing at that subtree's boundary)."""
+    network = _feeder()
+    trades = (
+        Trade(
+            buyer_household_id="h4", seller_household_id="h1", kwh=4.443359375, price_per_kwh=5.0
+        ),
+        Trade(
+            buyer_household_id="h4", seller_household_id="h1", kwh=17.55859375, price_per_kwh=5.0
+        ),
+        Trade(buyer_household_id="h1", seller_household_id="h4", kwh=2.0, price_per_kwh=5.0),
+        Trade(buyer_household_id="h10", seller_household_id="h4", kwh=18.0, price_per_kwh=5.0),
+    )
+
+    result = safety.enforce(network, trades)
+
+    assert result.resolved is True
+    assert _within_limits(network, result.flow)

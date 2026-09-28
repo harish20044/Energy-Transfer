@@ -73,21 +73,37 @@ def _worst_voltage_violation(
 
 def _curtail_largest_trade_in(
     trades: tuple[Trade, ...],
-    subtree: frozenset[str],
+    subtrees: tuple[frozenset[str], ...],
     reduce_by_kwh: float,
     *,
     curtail_side: str,
 ) -> tuple[tuple[Trade, ...], Curtailment | None]:
-    """Reduce the single largest matched trade with its `curtail_side`
-    household inside `subtree`, by up to `reduce_by_kwh`.
+    """Reduce the single largest matched trade that actually crosses one of
+    `subtrees`' boundaries on its `curtail_side`, by up to `reduce_by_kwh`.
 
     Which side to curtail depends on which direction of flow is causing the
-    violation: a subtree pushing too much *export* toward the substation (a
-    reverse-flow overload, or a voltage rise above the statutory ceiling)
-    needs its **sellers** cut back; a subtree pulling too much *import*
-    through a line (an ordinary overload, or a voltage sag below the floor)
-    needs its **buyers** cut back instead — the seller causing an import-side
-    violation may not even be inside the affected subtree.
+    violation: exporting too much toward the substation (a reverse-flow
+    overload, or a voltage rise above the statutory ceiling) needs
+    **sellers** cut back; pulling too much import through a line (an
+    ordinary overload, or a voltage sag below the floor) needs **buyers**
+    cut back instead — the seller responsible for an import-side violation
+    may not even be inside the affected subtree.
+
+    A trade only ever affects a boundary it actually crosses: one where its
+    curtailed-side household is inside a subtree and the *other* side is
+    outside that same subtree. A trade with both parties on the same side of
+    every candidate boundary is internal to all of them — the seller's
+    export and the buyer's import cancel exactly, so it contributes nothing
+    to any of those boundaries' flow, and curtailing it can never fix a
+    violation there. `subtrees` is checked as a union rather than a single
+    set for exactly this reason: a voltage violation depends on the
+    cumulative drop across *every* segment from the substation down to the
+    violated bus, not just the outermost one, so a trade purely internal to
+    one lateral can still be the true cause if it crosses one of the
+    segments closer to that bus — passing every nested subtree along that
+    path, not just the widest one, is what catches it. Whenever a violation
+    is genuinely caused by trade flow, a boundary-crossing candidate always
+    exists in at least one of them.
 
     Curtailing the largest offender first (rather than spreading the cut thin
     across many small trades) is deterministic, converges in the fewest
@@ -99,7 +115,17 @@ def _curtail_largest_trade_in(
         if curtail_side == "seller"
         else (lambda trade: trade.buyer_household_id)
     )
-    candidates = [index for index, trade in enumerate(trades) if household_of(trade) in subtree]
+    other_household_of: Callable[[Trade], str] = (
+        (lambda trade: trade.buyer_household_id)
+        if curtail_side == "seller"
+        else (lambda trade: trade.seller_household_id)
+    )
+    candidates = {
+        index
+        for index, trade in enumerate(trades)
+        for subtree in subtrees
+        if household_of(trade) in subtree and other_household_of(trade) not in subtree
+    }
     if not candidates:
         return trades, None
 
@@ -150,7 +176,7 @@ def enforce(network: Network, trades: tuple[Trade, ...]) -> SafetyResult:
             # distflow.solve's sign convention.
             side = "buyer" if flow.line_flow_kw[line_id] > 0 else "seller"
             current_trades, cut = _curtail_largest_trade_in(
-                current_trades, subtree, excess_kw, curtail_side=side
+                current_trades, (subtree,), excess_kw, curtail_side=side
             )
             if cut is None:
                 break  # no matching household left in the overloaded subtree
@@ -160,19 +186,17 @@ def enforce(network: Network, trades: tuple[Trade, ...]) -> SafetyResult:
         voltage = _worst_voltage_violation(network, flow)
         if voltage is not None:
             bus, _excess_pu = voltage
-            # Every segment on the path from the substation to `bus` carries
-            # flow contributed by the *whole* lateral `bus` sits on — not
-            # just by bus's own narrow downstream subtree. A trailing chain
-            # of zero-injection buses below the true offender all show the
-            # same voltage (nothing changes their drop), so if the violated
-            # bus happens to be one of those and its own subtree is queried,
-            # the actual offending household further up the same lateral is
-            # missed entirely. Using the whole lateral's subtree instead
-            # always includes it, at the cost of being slightly less
-            # surgical about which household on that lateral gets curtailed.
+            # The cumulative drop at `bus` is contributed by every segment on
+            # the path from the substation down to it, not just the widest
+            # one — a household could be the true offender by crossing any
+            # single one of those segments, even if it never touches the
+            # outermost boundary of the whole lateral. Passing every nested
+            # subtree along the path (rather than picking one) is what lets
+            # `_curtail_largest_trade_in` find a candidate wherever it
+            # actually is, including a trade that's purely internal to this
+            # lateral but still crosses an inner segment.
             path = network.path_from_substation(bus)
-            lateral_root = path[0].to_bus
-            subtree = network.subtree(lateral_root)
+            subtrees = tuple(network.subtree(line.to_bus) for line in path)
             # A voltage RISE above the ceiling is caused by too much export
             # from within the subtree (reverse flow); a voltage SAG below the
             # floor is caused by too much import INTO the subtree — the
@@ -186,14 +210,15 @@ def enforce(network: Network, trades: tuple[Trade, ...]) -> SafetyResult:
                 else (lambda t: t.buyer_household_id)
             )
             # Voltage error doesn't convert to kWh directly (it depends on
-            # line resistance); curtailing 10% of the subtree's current
+            # line resistance); curtailing 10% of the whole lateral's current
             # export/import and re-solving converges reliably in a few
             # rounds without needing that conversion.
+            lateral_subtree = subtrees[0]
             reduce_by_kwh = 0.1 * sum(
-                trade.kwh for trade in current_trades if household_of(trade) in subtree
+                trade.kwh for trade in current_trades if household_of(trade) in lateral_subtree
             )
             current_trades, cut = _curtail_largest_trade_in(
-                current_trades, subtree, max(reduce_by_kwh, 0.01), curtail_side=side
+                current_trades, subtrees, max(reduce_by_kwh, 0.01), curtail_side=side
             )
             if cut is None:
                 break
