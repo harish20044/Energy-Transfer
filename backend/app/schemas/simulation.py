@@ -42,6 +42,7 @@ class TradeOut(BaseModel):
     model_config = {"from_attributes": True}
 
     tick_index: int
+    round_index: int
     buyer_household_id: str
     seller_household_id: str
     kwh: float
@@ -54,3 +55,24 @@ class HouseholdBalanceOut(BaseModel):
     net_balance: float
     total_sold_kwh: float
     total_bought_kwh: float
+
+
+class NegotiationOfferOut(BaseModel):
+    model_config = {"from_attributes": True}
+
+    household_id: str
+    side: str
+    price: float
+    kwh: float
+
+
+class NegotiationRoundOut(BaseModel):
+    round_index: int
+    asks: list[NegotiationOfferOut]
+    bids: list[NegotiationOfferOut]
+    trades: list[TradeOut]
+
+
+class NegotiationTickOut(BaseModel):
+    tick_index: int
+    rounds: list[NegotiationRoundOut]

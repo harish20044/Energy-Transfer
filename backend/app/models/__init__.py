@@ -9,6 +9,7 @@ from app.models.simulation import (
     CurtailmentRecord,
     LedgerEntryRecord,
     MeterReading,
+    NegotiationOfferRecord,
     SimulationState,
     TradeRecord,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "Household",
     "LedgerEntryRecord",
     "MeterReading",
+    "NegotiationOfferRecord",
     "SimulationState",
     "TradeRecord",
     "User",

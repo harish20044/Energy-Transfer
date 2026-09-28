@@ -17,7 +17,7 @@ from app.domain.battery.policy import BatteryAction, plan_position, reservation_
 from app.domain.grid.network import Network
 from app.domain.grid.safety import SafetyResult, enforce
 from app.domain.ledger.hashchain import LedgerEntry, append
-from app.domain.market.auction import AuctionResult, clear_uniform_price
+from app.domain.market.negotiation import DEFAULT_ROUNDS, NegotiationResult, negotiate
 from app.domain.market.orderbook import Order, Side
 
 _QUANTITY_EPSILON = 1e-9
@@ -48,10 +48,21 @@ class HouseholdTickOutcome:
 @dataclass(frozen=True, slots=True)
 class TickResult:
     tick_index: int
-    auction: AuctionResult
+    negotiation: NegotiationResult
     safety: SafetyResult
     new_ledger_entries: tuple[LedgerEntry, ...]
     household_outcomes: tuple[HouseholdTickOutcome, ...]
+
+
+def _urgency_for(net_for_market_kw: float, battery: Battery) -> float:
+    """How fast this household concedes toward its reservation price: a
+    seller sitting on a nearly-full battery has nowhere left to put more
+    surplus, so it's eager to sell now rather than risk curtailing next
+    tick; a buyer close to empty is eager to buy now rather than risk
+    breaching its own reserve. Both read directly off the battery state
+    already decided this tick — no separate notion of "urgency" is stored
+    anywhere."""
+    return battery.soc if net_for_market_kw > 0 else 1.0 - battery.soc
 
 
 def run_tick(
@@ -64,12 +75,15 @@ def run_tick(
     feed_in_tariff: float,
     retail_tariff: float,
     is_evening: bool,
+    negotiation_rounds: int = DEFAULT_ROUNDS,
 ) -> TickResult:
     """Run one tick for every household in `inputs` at once — they all share
-    the same feeder and clear against each other in a single auction."""
+    the same feeder and negotiate against each other before a single
+    settlement clears."""
     asks: list[Order] = []
     bids: list[Order] = []
     plans: dict[str, tuple[BatteryAction, Battery, float]] = {}
+    urgency: dict[str, float] = {}
 
     for household in inputs:
         net_generation_kw = household.generation_kw - household.consumption_kw
@@ -90,15 +104,21 @@ def run_tick(
             feed_in_tariff=feed_in_tariff,
             retail_tariff=retail_tariff,
         )
+        urgency[household.household_id] = _urgency_for(plan.net_for_market_kw, plan.battery)
         if plan.net_for_market_kw > 0:
             asks.append(Order(household.household_id, Side.ASK, kwh, price))
         else:
             bids.append(Order(household.household_id, Side.BID, kwh, price))
 
-    auction = clear_uniform_price(
-        asks, bids, feed_in_tariff=feed_in_tariff, retail_tariff=retail_tariff
+    negotiation = negotiate(
+        asks,
+        bids,
+        feed_in_tariff=feed_in_tariff,
+        retail_tariff=retail_tariff,
+        rounds=negotiation_rounds,
+        urgency=urgency,
     )
-    safety = enforce(network, auction.trades)
+    safety = enforce(network, negotiation.trades)
 
     new_chain = ledger_chain
     for trade in safety.trades:
@@ -148,7 +168,7 @@ def run_tick(
 
     return TickResult(
         tick_index=tick_index,
-        auction=auction,
+        negotiation=negotiation,
         safety=safety,
         new_ledger_entries=new_entries,
         household_outcomes=tuple(outcomes),

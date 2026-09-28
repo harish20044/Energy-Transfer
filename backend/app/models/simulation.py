@@ -65,16 +65,37 @@ class MeterReading(Base):
 
 
 class TradeRecord(Base):
-    """One matched, safety-approved trade from one tick's auction."""
+    """One matched, safety-approved trade from one tick's negotiation."""
 
     __tablename__ = "trades"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     tick_index: Mapped[int] = mapped_column(Integer, index=True)
+    # Which negotiation round this pair actually crossed at — 0 means they
+    # matched immediately; a household whose battery is nearly full or empty
+    # concedes faster and tends to match in an earlier round than one with
+    # headroom to be patient. See app.domain.market.negotiation.
+    round_index: Mapped[int] = mapped_column(Integer)
     buyer_household_id: Mapped[str] = mapped_column(ForeignKey("households.id"), index=True)
     seller_household_id: Mapped[str] = mapped_column(ForeignKey("households.id"), index=True)
     kwh: Mapped[float] = mapped_column(Float)
     price_per_kwh: Mapped[float] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class NegotiationOfferRecord(Base):
+    """One household's ask or bid at one round of one tick's negotiation —
+    the raw material for replaying "watch them negotiate" in the UI."""
+
+    __tablename__ = "negotiation_offers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tick_index: Mapped[int] = mapped_column(Integer, index=True)
+    round_index: Mapped[int] = mapped_column(Integer)
+    household_id: Mapped[str] = mapped_column(ForeignKey("households.id"), index=True)
+    side: Mapped[str] = mapped_column(String(4))  # "ask" or "bid"
+    price: Mapped[float] = mapped_column(Float)
+    kwh: Mapped[float] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

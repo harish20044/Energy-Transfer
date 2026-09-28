@@ -9,8 +9,8 @@ isolation the way `/households/me` does.
 
 from __future__ import annotations
 
-from fastapi import APIRouter
-from sqlalchemy import delete, update
+from fastapi import APIRouter, Query
+from sqlalchemy import delete, select, update
 
 from app.api.deps import CurrentUserDep, DbDep, SettingsDep
 from app.engine.runner import advance_one_tick, get_or_create_state, touch
@@ -19,10 +19,18 @@ from app.models.simulation import (
     CurtailmentRecord,
     LedgerEntryRecord,
     MeterReading,
+    NegotiationOfferRecord,
     SimulationState,
     TradeRecord,
 )
-from app.schemas.simulation import PlayRequest, SimulationStateOut
+from app.schemas.simulation import (
+    NegotiationOfferOut,
+    NegotiationRoundOut,
+    NegotiationTickOut,
+    PlayRequest,
+    SimulationStateOut,
+    TradeOut,
+)
 from app.simulator.profiles import day_index, hour_of_day
 
 router = APIRouter(prefix="/simulation", tags=["simulation"])
@@ -47,6 +55,55 @@ async def read_state(
     state = await get_or_create_state(db)
     await db.commit()
     return _to_out(state, tick_minutes=settings.market_tick_minutes)
+
+
+@router.get("/negotiation", response_model=NegotiationTickOut)
+async def read_negotiation(
+    _current_user: CurrentUserDep,
+    db: DbDep,
+    tick_index: int = Query(ge=0),
+) -> NegotiationTickOut:
+    """The round-by-round order book for one tick — every offer and every
+    trade, in the order they actually happened. This is market-wide
+    information, the same as an order book on any real exchange, not a
+    single household's private data, so any signed-in account can read it."""
+    offers = (
+        await db.scalars(
+            select(NegotiationOfferRecord)
+            .where(NegotiationOfferRecord.tick_index == tick_index)
+            .order_by(NegotiationOfferRecord.round_index)
+        )
+    ).all()
+    trades = (
+        await db.scalars(
+            select(TradeRecord)
+            .where(TradeRecord.tick_index == tick_index)
+            .order_by(TradeRecord.round_index)
+        )
+    ).all()
+
+    round_indices = sorted({offer.round_index for offer in offers})
+    rounds = [
+        NegotiationRoundOut(
+            round_index=round_index,
+            asks=[
+                NegotiationOfferOut.model_validate(o)
+                for o in offers
+                if o.round_index == round_index and o.side == "ask"
+            ],
+            bids=[
+                NegotiationOfferOut.model_validate(o)
+                for o in offers
+                if o.round_index == round_index and o.side == "bid"
+            ],
+            trades=[
+                TradeOut.model_validate(t) for t in trades if t.round_index == round_index
+            ],
+        )
+        for round_index in round_indices
+    ]
+
+    return NegotiationTickOut(tick_index=tick_index, rounds=rounds)
 
 
 @router.post("/play", response_model=SimulationStateOut)
@@ -100,6 +157,7 @@ async def reset(
     """Wipe every tick's history and every household's battery back to its
     starting charge — a fresh day, optionally under a different scenario."""
     await db.execute(delete(MeterReading))
+    await db.execute(delete(NegotiationOfferRecord))
     await db.execute(delete(TradeRecord))
     await db.execute(delete(CurtailmentRecord))
     await db.execute(delete(LedgerEntryRecord))

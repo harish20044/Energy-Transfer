@@ -21,6 +21,11 @@ class Trade:
     seller_household_id: str
     kwh: float
     price_per_kwh: float
+    # Which negotiation round this pair crossed at (0 for a single-shot
+    # clearing with no negotiation) — set by app.domain.market.negotiation,
+    # not by this module, and untouched by app.domain.grid.safety's
+    # curtailment, which only ever reduces `kwh` via dataclasses.replace.
+    round_index: int = 0
 
 
 @dataclass(frozen=True, slots=True)

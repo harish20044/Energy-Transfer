@@ -24,6 +24,7 @@ from app.models.simulation import (
     CurtailmentRecord,
     LedgerEntryRecord,
     MeterReading,
+    NegotiationOfferRecord,
     SimulationState,
     TradeRecord,
 )
@@ -165,10 +166,35 @@ async def advance_one_tick(session: AsyncSession, settings: Settings | None = No
             )
         )
 
+    for negotiation_round in result.negotiation.rounds:
+        for ask in negotiation_round.asks:
+            session.add(
+                NegotiationOfferRecord(
+                    tick_index=result.tick_index,
+                    round_index=negotiation_round.round_index,
+                    household_id=ask.household_id,
+                    side=ask.side.value,
+                    price=ask.limit_price,
+                    kwh=ask.kwh,
+                )
+            )
+        for bid in negotiation_round.bids:
+            session.add(
+                NegotiationOfferRecord(
+                    tick_index=result.tick_index,
+                    round_index=negotiation_round.round_index,
+                    household_id=bid.household_id,
+                    side=bid.side.value,
+                    price=bid.limit_price,
+                    kwh=bid.kwh,
+                )
+            )
+
     for trade in result.safety.trades:
         session.add(
             TradeRecord(
                 tick_index=result.tick_index,
+                round_index=trade.round_index,
                 buyer_household_id=trade.buyer_household_id,
                 seller_household_id=trade.seller_household_id,
                 kwh=trade.kwh,
