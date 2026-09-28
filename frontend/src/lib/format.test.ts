@@ -18,8 +18,8 @@ describe('energy units', () => {
     expect(kw(3.241)).toBe('3.24 kW');
   });
 
-  it('formats energy over an interval', () => {
-    expect(kwh(12.44)).toBe('12.4 kWh');
+  it('formats energy over an interval as EB-style units', () => {
+    expect(kwh(12.444)).toBe('12.44 units');
   });
 
   it('rounds percentages to whole numbers', () => {
@@ -44,10 +44,10 @@ describe('countdown', () => {
 
 describe('signed', () => {
   it('prefixes a positive value', () => {
-    expect(signed(2.1, kwh)).toBe('+2.1 kWh');
+    expect(signed(2.1, kwh)).toBe('+2.10 units');
   });
 
   it('leaves a negative value to its own sign', () => {
-    expect(signed(-2.1, kwh)).toBe('-2.1 kWh');
+    expect(signed(-2.1, kwh)).toBe('-2.10 units');
   });
 });

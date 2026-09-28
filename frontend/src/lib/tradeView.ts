@@ -26,8 +26,8 @@ export function toUiTrade(
     trade.round_index === 0 ? 'immediately' : `after ${String(trade.round_index)} rounds of negotiation`;
 
   const rationale = isSell
-    ? `Sold ${trade.kwh.toFixed(2)} kWh to ${householdLabel(counterpartyId)} at ₹${trade.price_per_kwh.toFixed(2)}/kWh, matching ${roundLabel}.`
-    : `Bought ${trade.kwh.toFixed(2)} kWh from ${householdLabel(counterpartyId)} at ₹${trade.price_per_kwh.toFixed(2)}/kWh, matching ${roundLabel}.`;
+    ? `Sold ${trade.kwh.toFixed(2)} units to ${householdLabel(counterpartyId)} at ₹${trade.price_per_kwh.toFixed(2)}/unit, matching ${roundLabel}.`
+    : `Bought ${trade.kwh.toFixed(2)} units from ${householdLabel(counterpartyId)} at ₹${trade.price_per_kwh.toFixed(2)}/unit, matching ${roundLabel}.`;
 
   return {
     id: `${String(trade.tick_index)}-${trade.seller_household_id}-${trade.buyer_household_id}-${String(trade.round_index)}`,

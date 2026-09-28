@@ -246,7 +246,11 @@ describe('authenticated session', () => {
     render(<App />);
 
     expect(await screen.findByRole('heading', { name: 'Dashboard' })).toBeInTheDocument();
-    expect(screen.getByText('Energy flow')).toBeInTheDocument();
+    // "Energy flow" only renders once the household's own live data has
+    // loaded — the "Dashboard" heading above it is the route's static page
+    // title and can appear a render or two earlier, so this must be awaited
+    // rather than asserted synchronously right after it.
+    expect(await screen.findByText('Energy flow')).toBeInTheDocument();
     expect(await screen.findByText('Net balance')).toBeInTheDocument();
     expect(await screen.findByText('Sold to House 2')).toBeInTheDocument();
   });

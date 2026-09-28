@@ -120,12 +120,12 @@ export function Settings() {
         <PreferenceRow
           label="Minimum sale price"
           description="Your agent never sells below this, so a trade always beats exporting"
-          value={`${inr(FEED_IN_TARIFF)}/kWh`}
+          value={`${inr(FEED_IN_TARIFF)}/unit`}
         />
         <PreferenceRow
           label="Maximum purchase price"
           description="Your agent never pays more than the utility would charge"
-          value={`${inr(RETAIL_TARIFF)}/kWh`}
+          value={`${inr(RETAIL_TARIFF)}/unit`}
         />
         <PreferenceRow
           label="Household size"

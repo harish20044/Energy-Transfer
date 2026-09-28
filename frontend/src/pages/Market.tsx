@@ -41,7 +41,7 @@ function OfferColumn({
     <div className="flex flex-col">
       <div className="flex items-center justify-between px-5 pb-2 text-[11px] font-semibold tracking-wider text-stone-400 uppercase">
         <span>{title}</span>
-        <span>kWh @ ₹/kWh</span>
+        <span>Units @ ₹/unit</span>
       </div>
       {offers.length === 0 ? (
         <p className="px-5 py-3 text-xs text-stone-400">Nobody on this side this tick.</p>
@@ -252,7 +252,7 @@ export function Market() {
                         {householdLabel(trade.seller_household_id)} → {householdLabel(trade.buyer_household_id)}
                       </span>
                       <span className="font-mono tnum">
-                        {trade.kwh.toFixed(2)} kWh @ {inr(trade.price_per_kwh)}
+                        {trade.kwh.toFixed(2)} units @ {inr(trade.price_per_kwh)}
                       </span>
                     </li>
                   ))}

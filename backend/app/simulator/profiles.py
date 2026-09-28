@@ -1,14 +1,20 @@
 """Per-household synthetic meter readings.
 
-A household's demand and generation are built from smooth daily curves —
-morning and evening demand peaks, a midday solar bell — scaled by that
-household's own member count and solar capacity, plus small deterministic
-noise so no two ticks are identical even for an otherwise-idle house.
+A household's demand is a smooth daily curve — morning and evening peaks —
+scaled by its own member count, plus small per-household noise so no two
+otherwise-identical houses draw exactly the same power (real behavioural
+variation: different appliances, different habits).
 
-Deterministic given (household_id, tick_index, seed): the noise comes from a
-`random.Random` seeded by hashing those three together, never from the
-process-wide `random` module, so the exact same tick can be reproduced later
-for a demo or a test.
+Solar generation deliberately gets none of that per-household noise. Every
+household in this simulation sits on the same feeder in the same
+neighbourhood, so they all see the same sun and the same clouds at the same
+instant — the only thing that should differ between two houses' solar output
+is their own installed capacity. `generation_kw` is therefore a pure function
+of the time of day, the scenario (the shared "weather"), and that one
+household's kWp; two houses with equal capacity always read identically.
+
+Deterministic given (household_id, tick_index, seed) for consumption; solar
+needs no seed at all, since it has no randomness left to seed.
 """
 
 from __future__ import annotations
@@ -32,6 +38,13 @@ SOLAR_PEAK_HOUR = 13.0
 SOLAR_WIDTH_HOURS = 2.6
 SOLAR_SUNRISE_HOUR = 6.0
 SOLAR_SUNSET_HOUR = 19.0
+
+# Real panels never deliver their STC-rated nameplate capacity in the field —
+# module heating, inverter conversion, wiring and soiling losses take a real
+# rooftop system down to roughly this fraction of nameplate on average across
+# a day. Combined with the bell curve below, a 1 kWp system nets ~5 units/day
+# on a clear day — the standard reference figure for Indian rooftop solar.
+SOLAR_PERFORMANCE_RATIO = 0.78
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,16 +111,19 @@ def consumption_kw(
 
 
 def generation_kw(
-    household_id: str,
     tick_index: int,
     *,
     solar_capacity_kwp: float,
     tick_minutes: int,
     scenario: Scenario,
-    seed: int,
 ) -> float:
     """This household's rooftop solar output for one tick, in kW. Zero for a
-    household with no panels (`solar_capacity_kwp == 0`) and at night."""
+    household with no panels (`solar_capacity_kwp == 0`) and at night.
+
+    No household id, no seed: two households with the same installed
+    capacity always read exactly the same value at the same tick, because in
+    reality they're under the same sky.
+    """
     if solar_capacity_kwp <= 0:
         return 0.0
 
@@ -117,11 +133,7 @@ def generation_kw(
 
     scenario_profile = profile_for(scenario)
     shape = _bell(hour, center=SOLAR_PEAK_HOUR, width_hours=SOLAR_WIDTH_HOURS, amplitude=1.0)
-    noise = _noise(
-        household_id, tick_index, seed, label="solar", sigma=0.02 * solar_capacity_kwp
-    )
-    output = solar_capacity_kwp * shape * scenario_profile.solar_factor + noise
-    return max(0.0, output)
+    return solar_capacity_kwp * shape * scenario_profile.solar_factor * SOLAR_PERFORMANCE_RATIO
 
 
 def reading_for(
@@ -145,11 +157,9 @@ def reading_for(
             seed=seed,
         ),
         generation_kw=generation_kw(
-            household_id,
             tick_index,
             solar_capacity_kwp=solar_capacity_kwp,
             tick_minutes=tick_minutes,
             scenario=scenario,
-            seed=seed,
         ),
     )

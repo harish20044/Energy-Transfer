@@ -28,9 +28,15 @@ export function kw(value: number): string {
   return `${value.toFixed(2)} kW`;
 }
 
-/** Energy over an interval. */
+/** Energy over an interval, in "units" — 1 unit = 1 kWh, the term every
+ *  Indian electricity board bill and net-metering statement actually uses
+ *  (always plural, even for a single unit — "1.00 units", exactly as an EB
+ *  bill reads), so trading reads the way a real EB transaction would. Two
+ *  decimals because a single 15-minute tick's energy is usually well under
+ *  one whole unit; rounding to a whole number would make most ticks read as
+ *  zero. */
 export function kwh(value: number): string {
-  return `${value.toFixed(1)} kWh`;
+  return `${value.toFixed(2)} units`;
 }
 
 export function percent(value: number): string {

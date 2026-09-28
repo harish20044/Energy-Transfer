@@ -28,7 +28,7 @@ function TradeExplanation({ trade }: { trade: Trade }) {
             {isSell ? 'Sold to' : 'Bought from'} {trade.counterparty}
           </h3>
           <p className="font-mono text-sm text-stone-500 tnum">
-            {trade.at} · {kwh(trade.kwh)} @ {inr(trade.pricePerKwh)}/kWh
+            {trade.at} · {kwh(trade.kwh)} @ {inr(trade.pricePerKwh)}/unit
           </p>
         </div>
         <Badge tone={isSell ? 'peer' : 'grid'}>{isSell ? 'Sale' : 'Purchase'}</Badge>
@@ -52,7 +52,7 @@ function TradeExplanation({ trade }: { trade: Trade }) {
             {isSell ? 'Better than feed-in by' : 'Cheaper than retail by'}
           </dt>
           <dd className="font-mono text-sm font-bold text-battery-600 tnum">
-            {inr(versusGrid)}/kWh
+            {inr(versusGrid)}/unit
           </dd>
         </div>
         <div>
