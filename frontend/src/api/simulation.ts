@@ -3,7 +3,7 @@
 
 import { apiFetch } from '@/api/client';
 
-export type Scenario = 'clear' | 'cloudy' | 'evening_peak' | 'heatwave';
+export type Scenario = 'clear' | 'cloudy' | 'heatwave';
 
 export interface SimulationState {
   tick_index: number;

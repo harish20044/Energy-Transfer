@@ -1,7 +1,12 @@
 import { BatteryCharging, IndianRupee, Leaf, Sun } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
+import type { Family } from '@/api/family';
+import { fetchOwnFamily } from '@/api/family';
+import { useAuth } from '@/auth/useAuth';
 import { EnergyFlow } from '@/components/dashboard/EnergyFlow';
+import { FamilyPanel } from '@/components/dashboard/FamilyPanel';
 import { PowerHistoryChart } from '@/components/dashboard/PowerHistoryChart';
 import { TradeList } from '@/components/dashboard/TradeList';
 import { Badge } from '@/components/ui/Badge';
@@ -13,7 +18,36 @@ import { toUiTrade } from '@/lib/tradeView';
 import { useLiveData } from '@/live/useLiveData';
 
 export function Dashboard() {
+  const { accessToken } = useAuth();
   const { household, readings, trades, balance, simulation, loading } = useLiveData();
+  const [family, setFamily] = useState<Family | null>(null);
+
+  // Fetched once on mount and then every 30s (occupancy only changes on the
+  // scale of hours, not seconds, so it doesn't need the 1s poll everything
+  // else on this page uses) rather than tied to the tick index, which would
+  // otherwise race the very first render against the simulation's own poll.
+  useEffect(() => {
+    if (accessToken === null) return;
+    let cancelled = false;
+
+    function load(): void {
+      fetchOwnFamily(accessToken as string)
+        .then((data) => {
+          if (!cancelled) setFamily(data);
+        })
+        .catch(() => {
+          // Not every account is linked to a household with a generated
+          // family (e.g. an operator) — the panel just stays hidden.
+        });
+    }
+
+    load();
+    const timer = setInterval(load, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [accessToken]);
 
   if (loading || household === null) {
     return (
@@ -130,12 +164,26 @@ export function Dashboard() {
         </Card>
       </div>
 
-      <Card
-        title="Recent power"
-        subtitle="Your own generation and consumption over recent ticks"
-      >
-        <PowerHistoryChart readings={readings} tickMinutes={tickMinutes} />
-      </Card>
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
+        <Card
+          className="xl:col-span-2"
+          title="Recent power"
+          subtitle="Your own generation and consumption over recent ticks"
+        >
+          <PowerHistoryChart readings={readings} tickMinutes={tickMinutes} />
+        </Card>
+
+        <Card
+          title="Who's home"
+          subtitle="What's actually driving your consumption right now"
+        >
+          {family !== null ? (
+            <FamilyPanel family={family} />
+          ) : (
+            <p className="text-sm text-stone-400">Loading your household's family…</p>
+          )}
+        </Card>
+      </div>
     </div>
   );
 }

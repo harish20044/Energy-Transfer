@@ -13,11 +13,23 @@ from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import CurrentUserDep, DbDep
+from app.api.deps import CurrentUserDep, DbDep, SettingsDep
+from app.engine.runner import get_or_create_state
 from app.models.household import Household
 from app.models.simulation import LedgerEntryRecord, MeterReading, TradeRecord
+from app.schemas.family import FamilyMemberOut, FamilyOut, HouseDesignOut, RoomStatusOut
 from app.schemas.household import EveningReserveUpdate, HouseholdPublic
 from app.schemas.simulation import HouseholdBalanceOut, MeterReadingOut, TradeOut
+from app.simulator.family import (
+    AC_UNITS,
+    BEDROOMS,
+    HALLS,
+    WASHROOMS,
+    generate_family,
+    snapshot_occupancy,
+)
+from app.simulator.profiles import hour_of_day, is_weekend
+from app.simulator.scenarios import Scenario, profile_for
 
 router = APIRouter(prefix="/households", tags=["households"])
 
@@ -118,4 +130,41 @@ async def read_own_balance(current_user: CurrentUserDep, db: DbDep) -> Household
         net_balance=sold_amount - bought_amount,
         total_sold_kwh=sold_kwh,
         total_bought_kwh=bought_kwh,
+    )
+
+
+@router.get("/me/family", response_model=FamilyOut)
+async def read_own_family(
+    current_user: CurrentUserDep, db: DbDep, settings: SettingsDep
+) -> FamilyOut:
+    """This household's own family and live room occupancy — who's actually
+    home right now, and which of the house's 4 bedroom ACs that's running."""
+    household = await _own_household(current_user, db)
+    state = await get_or_create_state(db)
+
+    hour = hour_of_day(state.tick_index, tick_minutes=settings.market_tick_minutes)
+    weekend = is_weekend(state.tick_index, tick_minutes=settings.market_tick_minutes)
+    scenario = Scenario(state.scenario)
+
+    family = generate_family(household.id, household.member_count, settings.sim_seed)
+    snapshot = snapshot_occupancy(family, hour, weekend, profile_for(scenario).demand_factor)
+
+    return FamilyOut(
+        house=HouseDesignOut(
+            bedrooms=BEDROOMS, washrooms=WASHROOMS, halls=HALLS, ac_units=AC_UNITS
+        ),
+        members=[
+            FamilyMemberOut(
+                index=member.index,
+                age=member.age,
+                role=member.role.value,
+                room=member.room,
+                home_now=snapshot.home_now[member.index],
+            )
+            for member in family.members
+        ],
+        rooms=[
+            RoomStatusOut(room=room.room, occupied=room.occupied, ac_intensity=room.ac_intensity)
+            for room in snapshot.rooms
+        ],
     )

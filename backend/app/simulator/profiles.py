@@ -1,9 +1,10 @@
 """Per-household synthetic meter readings.
 
-A household's demand is a smooth daily curve — morning and evening peaks —
-scaled by its own member count, plus small per-household noise so no two
-otherwise-identical houses draw exactly the same power (real behavioural
-variation: different appliances, different habits).
+A household's demand comes from `app.simulator.family`: a generated family
+of real ages occupying a real 4-bedroom house, each room's AC drawing power
+only when someone is actually home to run it. Small per-household noise sits
+on top so no two otherwise-identical houses draw exactly the same power
+(real behavioural variation: different appliances, different habits).
 
 Solar generation deliberately gets none of that per-household noise. Every
 household in this simulation sits on the same feeder in the same
@@ -24,15 +25,17 @@ import math
 import random
 from dataclasses import dataclass
 
+from app.simulator.family import (
+    AC_CYCLING_FACTOR,
+    AC_RATED_KW,
+    BASE_LOAD_KW,
+    PER_PRESENT_MEMBER_MISC_KW,
+    generate_family,
+    snapshot_occupancy,
+)
 from app.simulator.scenarios import Scenario, profile_for
 
 MINUTES_PER_DAY = 24 * 60
-
-# Per-member baseline draw (fridge, standby loads, ...), always-on.
-BASE_LOAD_KW_PER_MEMBER = 0.15
-MORNING_PEAK_KW_PER_MEMBER = 0.35
-EVENING_PEAK_KW_PER_MEMBER = 0.55
-WEEKEND_MIDDAY_KW_PER_MEMBER = 0.25
 
 SOLAR_PEAK_HOUR = 13.0
 SOLAR_WIDTH_HOURS = 2.6
@@ -87,27 +90,23 @@ def consumption_kw(
     scenario: Scenario,
     seed: int,
 ) -> float:
-    """This household's power draw for one tick, in kW."""
+    """This household's power draw for one tick, in kW — driven by who is
+    actually home right now and which of the house's 4 bedroom ACs their
+    presence is running, not a flat number scaled by headcount."""
     hour = hour_of_day(tick_index, tick_minutes=tick_minutes)
     weekend = is_weekend(tick_index, tick_minutes=tick_minutes)
     scenario_profile = profile_for(scenario)
 
-    per_member = BASE_LOAD_KW_PER_MEMBER
-    per_member += _bell(hour, center=7.5, width_hours=1.3, amplitude=MORNING_PEAK_KW_PER_MEMBER)
-    per_member += _bell(
-        hour,
-        center=20.0 if weekend else 19.0,
-        width_hours=2.2 if weekend else 1.8,
-        amplitude=EVENING_PEAK_KW_PER_MEMBER * scenario_profile.evening_peak_boost,
+    family = generate_family(household_id, member_count, seed)
+    snapshot = snapshot_occupancy(family, hour, weekend, scenario_profile.demand_factor)
+
+    ac_load_kw = sum(
+        AC_RATED_KW * AC_CYCLING_FACTOR * room.ac_intensity for room in snapshot.rooms
     )
-    if weekend:
-        per_member += _bell(
-            hour, center=13.0, width_hours=2.5, amplitude=WEEKEND_MIDDAY_KW_PER_MEMBER
-        )
+    misc_kw = BASE_LOAD_KW + snapshot.present_count * PER_PRESENT_MEMBER_MISC_KW
 
     noise = _noise(household_id, tick_index, seed, label="load", sigma=0.03 * member_count)
-    total = member_count * per_member * scenario_profile.demand_factor + noise
-    return max(0.0, total)
+    return max(0.0, ac_load_kw + misc_kw + noise)
 
 
 def generation_kw(

@@ -108,6 +108,22 @@ const FAKE_NEGOTIATION = {
   ],
 };
 
+const FAKE_FAMILY = {
+  house: { bedrooms: 4, washrooms: 5, halls: 1, ac_units: 4 },
+  members: [
+    { index: 0, age: 42, role: 'parent', room: 1, home_now: true },
+    { index: 1, age: 39, role: 'parent', room: 1, home_now: false },
+    { index: 2, age: 14, role: 'child', room: 2, home_now: true },
+    { index: 3, age: 6, role: 'child', room: null, home_now: true },
+  ],
+  rooms: [
+    { room: 1, occupied: true, ac_intensity: 0.8 },
+    { room: 2, occupied: true, ac_intensity: 0.6 },
+    { room: 3, occupied: false, ac_intensity: 0.0 },
+    { room: 4, occupied: false, ac_intensity: 0.0 },
+  ],
+};
+
 const FAKE_NETWORK = {
   household_ids: ['h1', 'h2', 'h3'],
   lines: [
@@ -162,6 +178,9 @@ function stubApi({ authenticated = true, loginSucceeds = true } = {}) {
       }
       if (url.includes('/households/me/balance')) {
         return Promise.resolve(jsonResponse(FAKE_BALANCE));
+      }
+      if (url.includes('/households/me/family')) {
+        return Promise.resolve(jsonResponse(FAKE_FAMILY));
       }
       if (url.includes('/households/me')) {
         return Promise.resolve(jsonResponse(FAKE_HOUSEHOLD));
@@ -253,6 +272,8 @@ describe('authenticated session', () => {
     expect(await screen.findByText('Energy flow')).toBeInTheDocument();
     expect(await screen.findByText('Net balance')).toBeInTheDocument();
     expect(await screen.findByText('Sold to House 2')).toBeInTheDocument();
+    expect(await screen.findByText('Parent · 42y')).toBeInTheDocument();
+    expect(screen.getByText('4 bedrooms')).toBeInTheDocument();
   });
 
   it('shows the signed-in user in the sidebar', async () => {

@@ -9,7 +9,6 @@ import { useLiveData } from '@/live/useLiveData';
 const SCENARIOS: { value: Scenario; label: string }[] = [
   { value: 'clear', label: 'Clear day' },
   { value: 'cloudy', label: 'Cloudy day' },
-  { value: 'evening_peak', label: 'Evening peak' },
   { value: 'heatwave', label: 'Heatwave' },
 ];
 
