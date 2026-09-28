@@ -28,7 +28,7 @@ from app.models.simulation import (
     SimulationState,
     TradeRecord,
 )
-from app.simulator.profiles import hour_of_day, reading_for
+from app.simulator.profiles import MINUTES_PER_DAY, hour_of_day, reading_for
 from app.simulator.scenarios import Scenario
 
 log = get_logger(__name__)
@@ -229,6 +229,13 @@ async def advance_one_tick(session: AsyncSession, settings: Settings | None = No
         )
 
     state.tick_index += 1
+    # One simulated day, properly watched, is worth more than several running
+    # together unattended — auto-pause the instant a full day completes so
+    # the next day always starts as a deliberate choice (and a fresh
+    # scenario pick), never just an unattended continuation.
+    ticks_per_day = MINUTES_PER_DAY // settings.market_tick_minutes
+    if state.tick_index % ticks_per_day == 0:
+        state.running = False
     touch(state)
     await session.commit()
     return result

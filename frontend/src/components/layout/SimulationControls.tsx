@@ -6,10 +6,14 @@ import { cn } from '@/lib/cn';
 import { simClock } from '@/lib/format';
 import { useLiveData } from '@/live/useLiveData';
 
-const SCENARIOS: { value: Scenario; label: string }[] = [
-  { value: 'clear', label: 'Clear day' },
-  { value: 'cloudy', label: 'Cloudy day' },
-  { value: 'heatwave', label: 'Heatwave' },
+const SCENARIOS: { value: Scenario; label: string; description: string }[] = [
+  { value: 'clear', label: 'Clear day', description: 'A normal sunny day — the baseline.' },
+  { value: 'cloudy', label: 'Cloudy day', description: 'Solar output crashes to ~35% of clear.' },
+  {
+    value: 'heatwave',
+    label: 'Heatwave',
+    description: 'More sun, but consumption up 50% — the stress test.',
+  },
 ];
 
 const SPEEDS: { value: number; label: string }[] = [
@@ -18,13 +22,22 @@ const SPEEDS: { value: number; label: string }[] = [
   { value: 0.15, label: '12×' },
 ];
 
+const MINUTES_PER_DAY = 24 * 60;
+
 /** The one control surface for the whole feeder's shared clock — every
  *  household watches and trades in the same ticks, so play/pause/reset here
- *  affects everyone's dashboard, not just the person who clicked it. */
+ *  affects everyone's dashboard, not just the person who clicked it.
+ *
+ *  A day is a deliberate, bounded unit: the backend auto-pauses the instant
+ *  one completes (see app.engine.runner.advance_one_tick), and starting the
+ *  next one always goes through this same "pick a scenario, then start"
+ *  step — never a silent continuation into an unattended day 2.
+ */
 export function SimulationControls() {
   const { simulation, play, pause, step, reset } = useLiveData();
   const [busy, setBusy] = useState(false);
   const [confirmingReset, setConfirmingReset] = useState(false);
+  const [pendingScenario, setPendingScenario] = useState<Scenario>('clear');
 
   if (simulation === null) {
     return <div className="h-9 w-64 animate-pulse rounded-lg bg-stone-100" aria-hidden="true" />;
@@ -39,6 +52,50 @@ export function SimulationControls() {
     }
   }
 
+  const ticksPerDay = Math.round(MINUTES_PER_DAY / simulation.tick_minutes);
+  const atDayBoundary = simulation.tick_index % ticksPerDay === 0;
+  const dayJustCompleted = atDayBoundary && simulation.tick_index > 0;
+
+  if (!simulation.running && atDayBoundary) {
+    return (
+      <div className="flex items-center gap-2 rounded-lg border border-peer-200 bg-peer-50/60 px-3 py-1.5">
+        <span className="text-xs font-semibold text-peer-800">
+          {dayJustCompleted ? `Day ${String(simulation.simulated_day)} complete —` : 'Ready —'}
+        </span>
+        <select
+          aria-label="Scenario for the next day"
+          value={pendingScenario}
+          disabled={busy}
+          onChange={(e) => {
+            setPendingScenario(e.target.value as Scenario);
+          }}
+          title={SCENARIOS.find((s) => s.value === pendingScenario)?.description}
+          className="rounded-lg border border-peer-300 bg-white py-1.5 pr-7 pl-2.5 text-xs font-medium text-stone-700 outline-none focus:border-peer-400"
+        >
+          {SCENARIOS.map((s) => (
+            <option key={s.value} value={s.value} title={s.description}>
+              {s.label}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() =>
+            void run(async () => {
+              await reset({ scenario: pendingScenario });
+              await play();
+            })
+          }
+          className="flex items-center gap-1.5 rounded-lg bg-peer-600 px-3.5 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-peer-700 disabled:opacity-60"
+        >
+          <Play className="size-4" aria-hidden="true" />
+          Start day
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="flex items-center gap-2">
       <div className="hidden items-center gap-2 rounded-lg border border-stone-200 px-3 py-1.5 lg:flex">
@@ -46,22 +103,8 @@ export function SimulationControls() {
         <span className="font-mono text-sm font-semibold text-stone-900 tnum">
           {simClock(simulation.simulated_hour)}
         </span>
-        <span className="text-xs text-stone-400">· tick {simulation.tick_index}</span>
+        <span className="text-xs text-stone-400">· tick {simulation.tick_index % ticksPerDay}</span>
       </div>
-
-      <select
-        aria-label="Scenario"
-        value={simulation.scenario}
-        disabled={busy}
-        onChange={(e) => void run(() => reset({ scenario: e.target.value as Scenario }))}
-        className="hidden rounded-lg border border-stone-200 bg-white py-1.5 pr-7 pl-2.5 text-xs font-medium text-stone-700 outline-none focus:border-peer-400 md:block"
-      >
-        {SCENARIOS.map((s) => (
-          <option key={s.value} value={s.value}>
-            {s.label}
-          </option>
-        ))}
-      </select>
 
       <select
         aria-label="Speed"
@@ -102,7 +145,7 @@ export function SimulationControls() {
         ) : (
           <Play className="size-4" aria-hidden="true" />
         )}
-        {simulation.running ? 'Pause' : 'Play'}
+        {simulation.running ? 'Pause' : 'Resume'}
       </button>
 
       {confirmingReset ? (
@@ -135,8 +178,8 @@ export function SimulationControls() {
           onClick={() => {
             setConfirmingReset(true);
           }}
-          title="Reset to a fresh day"
-          aria-label="Reset to a fresh day"
+          title="Stop and choose a new day"
+          aria-label="Stop and choose a new day"
           className="flex size-9 items-center justify-center rounded-lg border border-stone-200 text-stone-600 transition-colors hover:bg-stone-100 hover:text-stone-900 disabled:opacity-50"
         >
           <RotateCcw className="size-[18px]" aria-hidden="true" />
