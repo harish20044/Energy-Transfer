@@ -49,3 +49,4 @@ class UserPublic(BaseModel):
     email: str
     display_name: str
     role: UserRole
+    household_id: str | None

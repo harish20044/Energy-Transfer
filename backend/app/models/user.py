@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import Boolean, DateTime, Enum, String, func
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -46,3 +46,13 @@ class User(Base):
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    # One login per household, enforced by the unique constraint rather than
+    # by convention — null for operator/admin accounts, which aren't tied to
+    # a single house. This is the ONLY place a household is ever resolved
+    # from: every household-scoped route reads it off the authenticated
+    # user, and none accept a household id as a request parameter, so there
+    # is no id to spoof in the first place.
+    household_id: Mapped[str | None] = mapped_column(
+        String(20), ForeignKey("households.id"), unique=True, nullable=True
+    )
