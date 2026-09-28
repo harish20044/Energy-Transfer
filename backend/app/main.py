@@ -19,6 +19,7 @@ from app.api.v1.router import api_router
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging, get_logger
 from app.core.middleware import RequestContextMiddleware
+from app.engine.runner import start_background_loop, stop_background_loop
 
 log = get_logger(__name__)
 
@@ -46,7 +47,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         tick_minutes=settings.market_tick_minutes,
         tariff_band=f"{settings.feed_in_tariff}-{settings.retail_tariff} {settings.currency}",
     )
+    simulation_task = start_background_loop()
     yield
+    await stop_background_loop(simulation_task)
     log.info("service.shutdown", service=settings.app_name)
 
 

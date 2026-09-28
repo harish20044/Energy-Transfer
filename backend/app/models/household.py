@@ -47,4 +47,9 @@ class Household(Base):
     # by app.domain.battery.policy.plan_position on every tick, not baked in.
     evening_reserve: Mapped[float] = mapped_column(Float, default=DEFAULT_EVENING_RESERVE)
 
+    # The battery's live state of charge, carried from one tick to the next —
+    # the only piece of a household's simulation state that isn't rebuilt
+    # fresh every tick, since a battery has physical memory.
+    battery_soc: Mapped[float] = mapped_column(Float, default=0.5)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
