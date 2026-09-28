@@ -9,15 +9,20 @@ than a structural impossibility.
 
 from __future__ import annotations
 
+from dataclasses import asdict
+
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUserDep, DbDep, SettingsDep
+from app.domain.battery.model import Battery
 from app.engine.runner import get_or_create_state
+from app.forecasting.predict import forecast_household
 from app.models.household import Household
 from app.models.simulation import LedgerEntryRecord, MeterReading, TradeRecord
 from app.schemas.family import FamilyMemberOut, FamilyOut, HouseDesignOut, RoomStatusOut
+from app.schemas.forecast import ForecastOut, HourForecastOut
 from app.schemas.household import EveningReserveUpdate, HouseholdPublic
 from app.schemas.simulation import HouseholdBalanceOut, MeterReadingOut, TradeOut
 from app.simulator.family import (
@@ -32,6 +37,11 @@ from app.simulator.profiles import hour_of_day, is_weekend
 from app.simulator.scenarios import Scenario, profile_for
 
 router = APIRouter(prefix="/households", tags=["households"])
+
+# A household with no battery still needs a *valid* one to plug into the
+# domain layer's Battery dataclass (which requires capacity_kwh > 0) — see
+# the identical constant and rationale in app.engine.runner.
+_NO_BATTERY_CAPACITY_KWH = 0.01
 
 
 async def _own_household(current_user: CurrentUserDep, db: AsyncSession) -> Household:
@@ -167,4 +177,43 @@ async def read_own_family(
             RoomStatusOut(room=room.room, occupied=room.occupied, ac_intensity=room.ac_intensity)
             for room in snapshot.rooms
         ],
+    )
+
+
+@router.get("/me/forecast", response_model=ForecastOut)
+async def read_own_forecast(
+    current_user: CurrentUserDep, db: DbDep, settings: SettingsDep
+) -> ForecastOut:
+    """Next 1-4 hours: predicted consumption/generation (P10/P50/P90) and a
+    buy/sell/hold call per hour, from the trained LightGBM quantile
+    forecaster (ADR-0004) — or the seasonal-naive baseline if models aren't
+    available in this environment."""
+    household = await _own_household(current_user, db)
+    state = await get_or_create_state(db)
+
+    has_battery = household.battery_capacity_kwh > 0
+    battery = Battery(
+        capacity_kwh=household.battery_capacity_kwh if has_battery else _NO_BATTERY_CAPACITY_KWH,
+        soc=household.battery_soc,
+        max_charge_kw=household.battery_max_charge_kw,
+        max_discharge_kw=household.battery_max_discharge_kw,
+    )
+
+    model_name, hours = await forecast_household(
+        db,
+        household_id=household.id,
+        member_count=household.member_count,
+        solar_capacity_kwp=household.solar_capacity_kwp,
+        battery=battery,
+        evening_reserve=household.evening_reserve,
+        tick_index=state.tick_index,
+        tick_minutes=settings.market_tick_minutes,
+        scenario=Scenario(state.scenario),
+        seed=settings.sim_seed,
+    )
+
+    return ForecastOut(
+        household_id=household.id,
+        model=model_name,
+        hours=[HourForecastOut(**asdict(hour)) for hour in hours],
     )

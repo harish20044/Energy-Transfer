@@ -78,7 +78,12 @@ const FAKE_OWN_TRADES = [
   },
 ];
 
-const FAKE_BALANCE = { household_id: 'h1', net_balance: 12.5, total_sold_kwh: 3.2, total_bought_kwh: 1.1 };
+const FAKE_BALANCE = {
+  household_id: 'h1',
+  net_balance: 12.5,
+  total_sold_kwh: 3.2,
+  total_bought_kwh: 1.1,
+};
 
 const FAKE_NEGOTIATION = {
   tick_index: 9,
@@ -121,6 +126,65 @@ const FAKE_FAMILY = {
     { room: 2, occupied: true, ac_intensity: 0.6 },
     { room: 3, occupied: false, ac_intensity: 0.0 },
     { room: 4, occupied: false, ac_intensity: 0.0 },
+  ],
+};
+
+const FAKE_FORECAST = {
+  household_id: 'h1',
+  model: 'lightgbm-quantile',
+  hours: [
+    {
+      horizon_hours: 1,
+      hour_of_day: 15.25,
+      consumption_p10: 0.5,
+      consumption_p50: 0.7,
+      consumption_p90: 0.9,
+      generation_p10: 1.8,
+      generation_p50: 2.2,
+      generation_p90: 2.6,
+      net_p50_kw: 1.5,
+      recommended_action: 'sell',
+      projected_net_for_market_kw: 1.5,
+    },
+    {
+      horizon_hours: 2,
+      hour_of_day: 16.25,
+      consumption_p10: 0.6,
+      consumption_p50: 0.8,
+      consumption_p90: 1.0,
+      generation_p10: 1.2,
+      generation_p50: 1.6,
+      generation_p90: 2.0,
+      net_p50_kw: 0.8,
+      recommended_action: 'sell',
+      projected_net_for_market_kw: 0.8,
+    },
+    {
+      horizon_hours: 3,
+      hour_of_day: 17.25,
+      consumption_p10: 1.0,
+      consumption_p50: 1.3,
+      consumption_p90: 1.6,
+      generation_p10: 0.2,
+      generation_p50: 0.4,
+      generation_p90: 0.6,
+      net_p50_kw: -0.9,
+      recommended_action: 'buy',
+      projected_net_for_market_kw: -0.9,
+    },
+    {
+      horizon_hours: 4,
+      hour_of_day: 18.25,
+      consumption_p10: 1.1,
+      consumption_p50: 1.4,
+      consumption_p90: 1.7,
+      generation_p10: 0.0,
+      generation_p50: 0.0,
+      generation_p90: 0.0,
+      net_p50_kw: -1.4,
+      recommended_action: 'buy',
+      projected_net_for_market_kw: -1.4,
+    },
   ],
 };
 
@@ -181,6 +245,9 @@ function stubApi({ authenticated = true, loginSucceeds = true } = {}) {
       }
       if (url.includes('/households/me/family')) {
         return Promise.resolve(jsonResponse(FAKE_FAMILY));
+      }
+      if (url.includes('/households/me/forecast')) {
+        return Promise.resolve(jsonResponse(FAKE_FORECAST));
       }
       if (url.includes('/households/me')) {
         return Promise.resolve(jsonResponse(FAKE_HOUSEHOLD));
@@ -274,6 +341,9 @@ describe('authenticated session', () => {
     expect(await screen.findByText('Sold to House 2')).toBeInTheDocument();
     expect(await screen.findByText('Parent · 42y')).toBeInTheDocument();
     expect(screen.getByText('4 bedrooms')).toBeInTheDocument();
+    expect(await screen.findByText('Next 4 hours')).toBeInTheDocument();
+    expect(screen.getAllByText('Sell')).toHaveLength(2);
+    expect(screen.getAllByText('Buy')).toHaveLength(2);
   });
 
   it('shows the signed-in user in the sidebar', async () => {

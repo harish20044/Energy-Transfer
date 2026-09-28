@@ -133,7 +133,7 @@ plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
 # Third-party packages that ship no type information.
-module = ["pandapower.*", "lightgbm.*", "langgraph.*"]
+module = ["pandapower.*", "lightgbm.*", "langgraph.*", "pandas.*"]
 ignore_missing_imports = true
 
 [tool.pydantic-mypy]

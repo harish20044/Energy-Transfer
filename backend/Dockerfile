@@ -19,9 +19,10 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# curl is used by the container healthcheck; libpq is needed by asyncpg (P1).
+# curl is used by the container healthcheck; libpq is needed by asyncpg (P1);
+# libgomp1 is the OpenMP runtime LightGBM's compiled core links against (P3).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl libpq5 \
+    && apt-get install -y --no-install-recommends curl libpq5 libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 # =============================================================================
@@ -32,7 +33,7 @@ FROM base AS development
 # that editing source does not invalidate the (slow) dependency install layer.
 COPY pyproject.toml README.md ./
 RUN mkdir -p app && touch app/__init__.py \
-    && pip install -e ".[dev,db,auth]"
+    && pip install -e ".[dev,db,auth,ml]"
 
 COPY app ./app
 COPY tests ./tests
@@ -56,7 +57,7 @@ RUN groupadd --system --gid 1001 energy \
 
 COPY pyproject.toml README.md ./
 RUN mkdir -p app && touch app/__init__.py \
-    && pip install --no-cache-dir ".[db,auth]"
+    && pip install --no-cache-dir ".[db,auth,ml]"
 
 COPY --chown=energy:energy app ./app
 COPY --chown=energy:energy alembic ./alembic

@@ -4,9 +4,12 @@ import { Link } from 'react-router-dom';
 
 import type { Family } from '@/api/family';
 import { fetchOwnFamily } from '@/api/family';
+import type { Forecast } from '@/api/forecast';
+import { fetchOwnForecast } from '@/api/forecast';
 import { useAuth } from '@/auth/useAuth';
 import { EnergyFlow } from '@/components/dashboard/EnergyFlow';
 import { FamilyPanel } from '@/components/dashboard/FamilyPanel';
+import { ForecastPanel } from '@/components/dashboard/ForecastPanel';
 import { PowerHistoryChart } from '@/components/dashboard/PowerHistoryChart';
 import { TradeList } from '@/components/dashboard/TradeList';
 import { Badge } from '@/components/ui/Badge';
@@ -21,6 +24,7 @@ export function Dashboard() {
   const { accessToken } = useAuth();
   const { household, readings, trades, balance, simulation, loading } = useLiveData();
   const [family, setFamily] = useState<Family | null>(null);
+  const [forecast, setForecast] = useState<Forecast | null>(null);
 
   // Fetched once on mount and then every 30s (occupancy only changes on the
   // scale of hours, not seconds, so it doesn't need the 1s poll everything
@@ -49,6 +53,31 @@ export function Dashboard() {
     };
   }, [accessToken]);
 
+  // Same cadence as the family panel above — the forecast is expressed in
+  // whole hours, so it has no reason to refetch on every 1s tick poll.
+  useEffect(() => {
+    if (accessToken === null) return;
+    let cancelled = false;
+
+    function load(): void {
+      fetchOwnForecast(accessToken as string)
+        .then((data) => {
+          if (!cancelled) setForecast(data);
+        })
+        .catch(() => {
+          // Same reasoning as the family fetch above: not every account has
+          // a forecastable household, so the panel just stays hidden.
+        });
+    }
+
+    load();
+    const timer = setInterval(load, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [accessToken]);
+
   if (loading || household === null) {
     return (
       <div className="flex h-64 items-center justify-center text-sm text-stone-400">
@@ -61,8 +90,10 @@ export function Dashboard() {
   const tickMinutes = simulation?.tick_minutes ?? 15;
   const durationH = tickMinutes / 60;
 
-  const peerKw = latest !== undefined ? ownMarketKw(trades, household.id, latest.tick_index, tickMinutes) : 0;
-  const peerCount = latest !== undefined ? tradingPartnerCount(trades, household.id, latest.tick_index) : 0;
+  const peerKw =
+    latest !== undefined ? ownMarketKw(trades, household.id, latest.tick_index, tickMinutes) : 0;
+  const peerCount =
+    latest !== undefined ? tradingPartnerCount(trades, household.id, latest.tick_index) : 0;
   const gridKw = latest !== undefined ? latest.grid_kwh / durationH : 0;
 
   // Battery kW is derived from the change in state of charge between the two
@@ -173,10 +204,7 @@ export function Dashboard() {
           <PowerHistoryChart readings={readings} tickMinutes={tickMinutes} />
         </Card>
 
-        <Card
-          title="Who's home"
-          subtitle="What's actually driving your consumption right now"
-        >
+        <Card title="Who's home" subtitle="What's actually driving your consumption right now">
           {family !== null ? (
             <FamilyPanel family={family} />
           ) : (
@@ -184,6 +212,17 @@ export function Dashboard() {
           )}
         </Card>
       </div>
+
+      <Card
+        title="Next 4 hours"
+        subtitle="Forecast consumption vs. generation, and whether to buy or sell"
+      >
+        {forecast !== null ? (
+          <ForecastPanel hours={forecast.hours} model={forecast.model} />
+        ) : (
+          <p className="text-sm text-stone-400">Loading your forecast…</p>
+        )}
+      </Card>
     </div>
   );
 }
