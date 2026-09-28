@@ -26,7 +26,6 @@ import random
 from dataclasses import dataclass
 
 from app.simulator.family import (
-    AC_CYCLING_FACTOR,
     AC_RATED_KW,
     BASE_LOAD_KW,
     PER_PRESENT_MEMBER_MISC_KW,
@@ -37,16 +36,24 @@ from app.simulator.scenarios import Scenario, profile_for
 
 MINUTES_PER_DAY = 24 * 60
 
-SOLAR_PEAK_HOUR = 13.0
-SOLAR_WIDTH_HOURS = 2.6
+# Sunset in India ranges from ~16:40 in winter in the east to ~18:50 in
+# summer in the west (a single time zone spanning a wide longitude does
+# that); 6am-6pm is the representative middle of that range, not a specific
+# season or city. The width is tuned so the curve is already down to ~2% of
+# its peak by 6am/6pm — a physically honest taper, not just a hard cliff —
+# while the hard cutoff below still guarantees a real, unambiguous zero
+# past sunset rather than a lingering trickle.
+SOLAR_PEAK_HOUR = 12.0
+SOLAR_WIDTH_HOURS = 2.15
 SOLAR_SUNRISE_HOUR = 6.0
-SOLAR_SUNSET_HOUR = 19.0
+SOLAR_SUNSET_HOUR = 18.0
 
 # Real panels never deliver their STC-rated nameplate capacity in the field —
 # module heating, inverter conversion, wiring and soiling losses take a real
 # rooftop system down to roughly this fraction of nameplate on average across
-# a day. Combined with the bell curve below, a 1 kWp system nets ~5 units/day
-# on a clear day — the standard reference figure for Indian rooftop solar.
+# a day. Combined with the bell curve above, a 1 kWp system nets ~4.2
+# units/day on a clear day — matching MNRE/NIWE's ~4.1 kWh/kWp/day national
+# average (a ~17% capacity utilisation factor) for Indian rooftop solar.
 SOLAR_PERFORMANCE_RATIO = 0.78
 
 
@@ -100,9 +107,7 @@ def consumption_kw(
     family = generate_family(household_id, member_count, seed)
     snapshot = snapshot_occupancy(family, hour, weekend, scenario_profile.demand_factor)
 
-    ac_load_kw = sum(
-        AC_RATED_KW * AC_CYCLING_FACTOR * room.ac_intensity for room in snapshot.rooms
-    )
+    ac_load_kw = sum(AC_RATED_KW * room.ac_intensity for room in snapshot.rooms)
     misc_kw = BASE_LOAD_KW + snapshot.present_count * PER_PRESENT_MEMBER_MISC_KW
 
     noise = _noise(household_id, tick_index, seed, label="load", sigma=0.03 * member_count)

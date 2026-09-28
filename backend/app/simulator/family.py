@@ -37,11 +37,13 @@ _OWN_ROOM_MIN_AGE = 10  # younger than this, a child stays with the parents
 
 # A parent's age is derived from *when they actually had each child*, not
 # sampled independently of it — otherwise nothing stops a 52-year-old from
-# getting a newborn. NFHS (India's National Family Health Survey) puts the
-# average maternal age at first birth in the low-to-mid 20s; this samples a
-# plausible range around that rather than a single fixed number.
-_PARENT_AGE_AT_FIRST_CHILD_MIN = 20
-_PARENT_AGE_AT_FIRST_CHILD_MAX = 30
+# getting a newborn. NFHS-5 (2019-21, India's most recent National Family
+# Health Survey) puts the median age at first birth at 21.2 nationally, with
+# a rising share of women starting motherhood after 30 — this range uses
+# that median as its floor and extends into the 30s for that later tail,
+# rather than sampling from the (much younger) rural/older-survey figures.
+_PARENT_AGE_AT_FIRST_CHILD_MIN = 21
+_PARENT_AGE_AT_FIRST_CHILD_MAX = 32
 _OLDEST_CHILD_AGE_MIN = 0
 _OLDEST_CHILD_AGE_MAX = 28  # an adult child still living at home, before marriage
 _CHILD_SPACING_MIN_YEARS = 2
@@ -55,13 +57,28 @@ _WEEKDAY_WORK_END = 18.0
 _WEEKDAY_SCHOOL_START = 8.0
 _WEEKDAY_SCHOOL_END = 15.0
 
-# A standard 1.5-ton split AC's real average draw, and the fraction of that
-# it actually pulls once the thermostat starts cycling the compressor on and
-# off rather than running flat out.
-AC_RATED_KW = 1.45
-AC_CYCLING_FACTOR = 0.7
-BASE_LOAD_KW = 0.25  # always-on house load: fridge, router, standby lighting
-PER_PRESENT_MEMBER_MISC_KW = 0.08  # phone charging, personal lighting, etc.
+# Real neighbours don't run on one shared clock: different jobs, commutes and
+# sleep habits mean one household's whole day — when they leave, when they're
+# back, when they wind down for the night — sits a bit earlier or later than
+# the next one's, even under the identical solar and consumption *shape*.
+# Fixed per household (not per tick), the same way its family composition
+# is: this is what actually lets one house have a genuine surplus at the same
+# moment a neighbour has a genuine shortfall, instead of every household's
+# demand rising and falling in lockstep with everyone else's.
+_SCHEDULE_OFFSET_HOURS = 2.0
+
+# A standard 1.5-ton split AC's real *average* running draw in India — this
+# figure already reflects thermostat cycling (it's measured consumption, not
+# nameplate capacity), so nothing derates it further here; `ac_intensity`
+# below is purely about whether/how hard it's plausible to be running at
+# all, not a second efficiency discount on top of an already-real number.
+AC_RATED_KW = 1.4
+# ~1.9 kWh/day at 24/7 — a modern fridge plus router/standby draw, the part
+# of a bill that runs whether or not anyone's home.
+BASE_LOAD_KW = 0.08
+# Fans, personal lighting, phone/laptop charging, TV time — attributed per
+# person actually present, not per person registered to the house.
+PER_PRESENT_MEMBER_MISC_KW = 0.03
 
 
 class Role(StrEnum):
@@ -82,6 +99,10 @@ class Family:
     household_id: str
     members: tuple[FamilyMember, ...]
     occupied_bedrooms: int
+    # Hours this household's whole daily rhythm sits earlier (negative) or
+    # later (positive) than the shared baseline schedule — see
+    # _SCHEDULE_OFFSET_HOURS.
+    schedule_offset_hours: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,18 +179,25 @@ def generate_family(household_id: str, member_count: int, seed: int) -> Family:
         members.append(FamilyMember(index=index, age=child_age, role=Role.CHILD, room=room))
 
     occupied = len({member.room for member in members if member.room is not None} | {1})
-    return Family(household_id=household_id, members=tuple(members), occupied_bedrooms=occupied)
+    schedule_rng = _rng_for(household_id, seed, "schedule")
+    schedule_offset_hours = schedule_rng.uniform(-_SCHEDULE_OFFSET_HOURS, _SCHEDULE_OFFSET_HOURS)
+    return Family(
+        household_id=household_id,
+        members=tuple(members),
+        occupied_bedrooms=occupied,
+        schedule_offset_hours=schedule_offset_hours,
+    )
 
 
-def _is_away(member: FamilyMember, hour: float, is_weekend: bool) -> bool:
+def _is_away(member: FamilyMember, hour: float, is_weekend: bool, offset_hours: float) -> bool:
     """True if this member is out of the house at this hour. Toddlers and
     anyone past typical working age are treated as generally home."""
     if is_weekend:
         return False
     if member.role is Role.PARENT and member.age < _ADULT_WORKING_MAX_AGE:
-        return _WEEKDAY_WORK_START <= hour < _WEEKDAY_WORK_END
+        return _WEEKDAY_WORK_START + offset_hours <= hour < _WEEKDAY_WORK_END + offset_hours
     if member.role is Role.CHILD and _SCHOOL_AGE_MIN <= member.age <= _SCHOOL_AGE_MAX:
-        return _WEEKDAY_SCHOOL_START <= hour < _WEEKDAY_SCHOOL_END
+        return _WEEKDAY_SCHOOL_START + offset_hours <= hour < _WEEKDAY_SCHOOL_END + offset_hours
     return False
 
 
@@ -181,12 +209,20 @@ def _circular_bell(hour: float, *, center: float, width_hours: float, amplitude:
     return amplitude * math.exp(-(circular_diff**2) / (2 * width_hours**2))
 
 
-def _ac_duty_cycle(hour: float) -> float:
-    """How hard an occupied room's AC runs at this hour, before any
-    household-specific occupancy or scenario intensity is applied — heaviest
-    overnight for sleeping, a lighter secondary bump for afternoon heat."""
-    night = _circular_bell(hour, center=1.0, width_hours=4.0, amplitude=0.9)
-    afternoon = _circular_bell(hour, center=15.0, width_hours=2.5, amplitude=0.5)
+def _ac_duty_cycle(hour: float, offset_hours: float) -> float:
+    """How hard an occupied room's AC runs at this hour, before scenario
+    intensity is applied — a real overnight sleeping window (tight enough to
+    be genuinely near-zero by mid-morning, not just reduced), plus a much
+    smaller afternoon-heat bump, both shifted by this household's own
+    schedule offset (a household that sleeps later runs its night AC later
+    too). Calibrated so one occupied room's AC nets ~2.3 effective full-duty
+    hours a day — at AC_RATED_KW, that is the fraction of a real household's
+    reported "8-10 hours a day" of AC *use* this room's occupant actually
+    contributes, once every occupied room in the house is added up."""
+    night = _circular_bell(hour, center=2.0 + offset_hours, width_hours=1.3, amplitude=0.8)
+    afternoon = _circular_bell(
+        hour, center=15.0 + offset_hours, width_hours=1.2, amplitude=0.15
+    )
     return min(1.0, night + afternoon)
 
 
@@ -199,15 +235,16 @@ def snapshot_occupancy(
     home_now: dict[int, bool] = {}
     occupied_rooms: set[int] = set()
     present_count = 0
+    offset = family.schedule_offset_hours
 
     for member in family.members:
-        home = not _is_away(member, hour, is_weekend)
+        home = not _is_away(member, hour, is_weekend, offset)
         home_now[member.index] = home
         if home:
             present_count += 1
             occupied_rooms.add(member.room if member.room is not None else 1)
 
-    duty = min(1.0, _ac_duty_cycle(hour) * demand_factor)
+    duty = min(1.0, _ac_duty_cycle(hour, offset) * demand_factor)
     rooms = tuple(
         RoomStatus(
             room=room,
