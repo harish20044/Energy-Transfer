@@ -1,14 +1,11 @@
-"""Named weather/demand scenarios. Each is just a pair of multipliers applied
-on top of the base profiles in `app.simulator.profiles` — the scenario picks
-how much sun there is and how hard households lean on cooling, not a
-separate model.
+"""The weather a simulated day runs under.
 
-There is deliberately no "evening peak" scenario: every household already
-has an evening every day, and `app.simulator.family`'s occupancy model
-produces that ramp on its own — everyone comes home and switches their
-room's AC on around the same few hours, regardless of which scenario is
-selected. Making it a togglable scenario would have implied it was special;
-it isn't, it's just what a normal day looks like.
+`AUTO` is the realistic default: the day's sky and temperature are drawn
+from Chennai's own climatology for the chosen date — a May afternoon is hot
+and clear, a November day has a real chance of northeast-monsoon rain. The
+others are "what if" overrides for that same date: force a clear sky, broken
+cloud, a monsoon downpour, or an IMD-defined heatwave, and watch how the
+same households and the same market respond.
 """
 
 from __future__ import annotations
@@ -18,27 +15,37 @@ from enum import StrEnum
 
 
 class Scenario(StrEnum):
+    AUTO = "auto"
     CLEAR = "clear"
     CLOUDY = "cloudy"
+    RAINY = "rainy"
     HEATWAVE = "heatwave"
 
 
 @dataclass(frozen=True, slots=True)
-class ScenarioProfile:
-    solar_factor: float  # multiplies generation_kw
-    demand_factor: float  # multiplies AC duty cycle in consumption_kw
+class WeatherOverride:
+    rainy: bool
+    # Fraction of the date's clear-sky irradiance that reaches the ground.
+    clearness: float
+    t_max_shift_c: float = 0.0
+    t_min_shift_c: float = 0.0
 
 
-_PROFILES: dict[Scenario, ScenarioProfile] = {
-    Scenario.CLEAR: ScenarioProfile(solar_factor=1.0, demand_factor=1.0),
-    Scenario.CLOUDY: ScenarioProfile(solar_factor=0.35, demand_factor=1.0),
-    # Full sun (batteries and exports should be plentiful) but demand spikes
-    # too (air conditioning) — calibrated so several households exporting at
-    # once genuinely breaches the feeder's voltage ceiling. See
-    # app.domain.grid.network.default_feeder's calibration notes.
-    Scenario.HEATWAVE: ScenarioProfile(solar_factor=1.15, demand_factor=1.5),
+_OVERRIDES: dict[Scenario, WeatherOverride] = {
+    Scenario.CLEAR: WeatherOverride(rainy=False, clearness=0.97),
+    # Broken cumulus: the most *variable* sky, not just a dimmer one — the
+    # intra-day cloud model gives mid-range clearness its largest swings.
+    Scenario.CLOUDY: WeatherOverride(rainy=False, clearness=0.55),
+    Scenario.RAINY: WeatherOverride(rainy=True, clearness=0.30),
+    # IMD's heatwave criterion for a coastal station: a maximum of at least
+    # 37 deg C and at least 4.5 deg C above normal. Nights stay warm too,
+    # which is what actually drives Chennai's AC load.
+    Scenario.HEATWAVE: WeatherOverride(
+        rainy=False, clearness=0.93, t_max_shift_c=4.5, t_min_shift_c=2.0
+    ),
 }
 
 
-def profile_for(scenario: Scenario) -> ScenarioProfile:
-    return _PROFILES[scenario]
+def override_for(scenario: Scenario) -> WeatherOverride | None:
+    """None for AUTO — the day's weather comes from climatology instead."""
+    return _OVERRIDES.get(scenario)

@@ -98,8 +98,12 @@ class Settings(BaseSettings):
 
     # --- Market rules -------------------------------------------------------
     market_tick_minutes: int = Field(default=15, ge=1, le=60)
-    feed_in_tariff: float = Field(default=3.00, ge=0)
-    retail_tariff: float = Field(default=8.00, ge=0)
+    # Tamil Nadu: TNERC Order No. 8 of 2021 pays ₹3.61/unit for rooftop solar
+    # exports (1-10 kW); TNERC T.O. No. 6 of 2025 charges (post-subsidy)
+    # ₹10.50/unit in the 801-1000 units per two-month slab — the marginal
+    # rate these households pay for every extra unit they import.
+    feed_in_tariff: float = Field(default=3.61, ge=0)
+    retail_tariff: float = Field(default=10.50, ge=0)
     currency: str = "INR"
     auction_mechanism: AuctionMechanism = AuctionMechanism.UNIFORM
 
@@ -112,7 +116,7 @@ class Settings(BaseSettings):
     # --- LLM ----------------------------------------------------------------
     llm_provider: LLMProvider = LLMProvider.STUB
     groq_api_key: str = ""
-    groq_model: str = "llama-3.3-70b-versatile"
+    groq_model: str = "openai/gpt-oss-120b"
     ollama_base_url: str = "http://host.docker.internal:11434"
     ollama_model: str = "llama3.2:3b"
     llm_timeout_seconds: float = Field(default=30.0, gt=0)

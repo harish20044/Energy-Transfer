@@ -10,7 +10,7 @@ pytestmark = pytest.mark.unit
 
 
 def test_seasonal_naive_echoes_yesterdays_reading() -> None:
-    forecast = seasonal_naive(lag_24h_consumption_kw=1.5, lag_24h_generation_kw=2.5)
+    forecast = seasonal_naive(lag_day_consumption_kw=1.5, lag_day_generation_kw=2.5)
 
     assert forecast.consumption_kw == 1.5
     assert forecast.generation_kw == 2.5

@@ -11,14 +11,18 @@ value versus a persisted row — it is holding.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, func
+from sqlalchemy import JSON, Date, DateTime, Float, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
 
 SIMULATION_STATE_SINGLETON_ID = 1
+# Mid-May: Chennai's hottest stretch (Agni Nakshatram), when AC load, solar
+# output and the gap between them are all at their most interesting.
+DEFAULT_SIM_DATE = date(2026, 5, 15)
 
 
 class SimulationState(Base):
@@ -31,13 +35,21 @@ class SimulationState(Base):
         Integer, primary_key=True, default=SIMULATION_STATE_SINGLETON_ID
     )
     tick_index: Mapped[int] = mapped_column(Integer, default=0)
-    running: Mapped[bool] = mapped_column(Boolean, default=False)
-    scenario: Mapped[str] = mapped_column(String(20), default="clear")
-    # Real seconds between ticks while running — this is what "accelerated
-    # clock" means in practice: a 15-minute simulated tick every few real
-    # seconds instead of every 15 real minutes.
-    seconds_per_tick: Mapped[float] = mapped_column(Float, default=2.0)
-    # Set from application code (app.engine.runner), not a server-side
+    scenario: Mapped[str] = mapped_column(String(20), default="auto")
+    # The calendar date the session starts on — it decides the season, the
+    # sun's path and the climatology every household's day is simulated under.
+    sim_date: Mapped[date] = mapped_column(Date, default=DEFAULT_SIM_DATE)
+    # The planning session: it starts at `start_hour` on `sim_date` and
+    # covers `horizon_hours` one-hour market slots. `tick_index` counts the
+    # 15-minute intervals delivered so far.
+    start_hour: Mapped[int] = mapped_column(Integer, default=14)
+    horizon_hours: Mapped[int] = mapped_column(Integer, default=12)
+    # "setup" (nothing planned) -> "planned" (forecast and market cleared)
+    # -> "playing" (hours being delivered) -> "complete".
+    status: Mapped[str] = mapped_column(String(10), default="setup")
+    # Session-wide what-ifs: EB power cut window, tariff changes.
+    what_ifs: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # Set from application code (app.engine.session), not a server-side
     # `onupdate` — a server-computed value on UPDATE would mark this column
     # expired and force a synchronous reload the moment it's read after
     # commit, which breaks under the async driver (MissingGreenlet).
@@ -61,6 +73,12 @@ class MeterReading(Base):
     # Unmatched position settled directly with the grid, outside the P2P
     # market: positive = imported from the grid, negative = exported to it.
     grid_kwh: Mapped[float] = mapped_column(Float)
+    # Neighbour contract delivered this interval (+ sold, - bought).
+    contracted_kwh: Mapped[float] = mapped_column(Float, default=0.0)
+    # During an EB power cut: load that couldn't be supplied, and solar the
+    # inverter had to back off because nowhere could take it.
+    unserved_kwh: Mapped[float] = mapped_column(Float, default=0.0)
+    curtailed_kwh: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

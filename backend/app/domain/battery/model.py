@@ -16,9 +16,8 @@ class Battery:
     """One household's storage.
 
     `soc` is state of charge as a fraction of `capacity_kwh` (0.0-1.0), not an
-    absolute energy amount — this keeps the reserve policy in
-    `battery.policy` unit-agnostic across households with different battery
-    sizes.
+    absolute energy amount — this keeps an owner's reserve setting
+    unit-agnostic across households with different battery sizes.
     """
 
     capacity_kwh: float

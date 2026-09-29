@@ -84,6 +84,7 @@ def negotiate(
     retail_tariff: float,
     rounds: int = DEFAULT_ROUNDS,
     urgency: dict[str, float] | None = None,
+    opening: dict[str, float] | None = None,
 ) -> NegotiationResult:
     """Run up to `rounds` rounds of concession, clearing a uniform-price
     auction each round against whatever quantity is still unmatched.
@@ -98,16 +99,32 @@ def negotiate(
     `_price_at`); a household missing from it concedes at the neutral,
     linear pace (`urgency=0.5`).
 
+    `opening` is each household's own first-round price — an agent that has
+    learned the market rarely pays near retail opens lower rather than
+    wasting rounds. It is clamped between the household's reservation price
+    and the edge of the tariff band (retail for a seller, feed-in for a
+    buyer), so it can shorten a negotiation but never break the band.
+    Households missing from it open at the band's edge, as before.
+
     Precondition: at most one ask and one bid per household — true of every
     order this system actually produces (a household nets to a single side
     and quantity per tick), and required here because remaining quantity is
     tracked per household id, not per order.
     """
     urgency = urgency or {}
+    opening = opening or {}
     remaining_ask_kwh = {order.household_id: order.kwh for order in asks}
     remaining_bid_kwh = {order.household_id: order.kwh for order in bids}
     ask_limit_price = {order.household_id: order.limit_price for order in asks}
     bid_limit_price = {order.household_id: order.limit_price for order in bids}
+    ask_opening = {
+        hid: min(retail_tariff, max(limit, opening.get(hid, retail_tariff)))
+        for hid, limit in ask_limit_price.items()
+    }
+    bid_opening = {
+        hid: max(feed_in_tariff, min(limit, opening.get(hid, feed_in_tariff)))
+        for hid, limit in bid_limit_price.items()
+    }
 
     negotiation_rounds: list[NegotiationRound] = []
     all_trades: list[Trade] = []
@@ -124,7 +141,7 @@ def negotiate(
                 _price_at(
                     round_index,
                     total_rounds=rounds,
-                    opening=retail_tariff,
+                    opening=ask_opening[household_id],
                     reservation=ask_limit_price[household_id],
                     urgency=urgency.get(household_id, 0.5),
                 ),
@@ -140,7 +157,7 @@ def negotiate(
                 _price_at(
                     round_index,
                     total_rounds=rounds,
-                    opening=feed_in_tariff,
+                    opening=bid_opening[household_id],
                     reservation=bid_limit_price[household_id],
                     urgency=urgency.get(household_id, 0.5),
                 ),

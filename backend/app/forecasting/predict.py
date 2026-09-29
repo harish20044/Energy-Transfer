@@ -1,243 +1,140 @@
-"""Live inference: combine a household's actual recent meter history (from
-the database — the same real readings the dashboard already shows) with the
-trained quantile models to forecast the next 1-4 hours, and turn each hour's
-median net position into a buy/sell/hold call using the same domain-layer
-battery policy that decides real trades
-(`app.domain.battery.policy.plan_position`) — so the panel's advice is
-computed the way the market itself would actually act on it, not a separate
-guess.
+"""Live inference: forecast one household's next 1-24 hours from the moment a
+planning session starts, under the session's weather and "what-if"
+conditions.
 
-Simplifying assumption, stated plainly: every horizon's recommendation uses
-the household's *current* battery state of charge, not a projection of where
-it will be after 1-3 more hours of trading. Compounding a battery trajectory
-forward under forecast uncertainty is a further step (and would need its own
-uncertainty treatment) — what this answers is "given today's battery, would
-this hour's typical position be a sale or a purchase", which is exactly the
-buy/sell signal being asked for.
+The meter history the features read is exactly what the simulator produced
+for each elapsed hour — the same values the persisted meter readings hold —
+so it's read from the same source. Turning a forecast into what to buy or
+sell is the household agent's job (`app.agents`), not this module's.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, timedelta
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.domain.battery.model import Battery
-from app.domain.battery.policy import BatteryAction, plan_position
 from app.forecasting.baseline import seasonal_naive
-from app.forecasting.features import HORIZONS_HOURS, HourlyLags, feature_row, household_family
-from app.forecasting.model import ModelMap, load_models, predict_quantiles
-from app.models.simulation import MeterReading
-from app.simulator.profiles import consumption_kw, generation_kw
+from app.forecasting.features import (
+    HOURS_PER_DAY,
+    MAX_HORIZON_HOURS,
+    TARGET_CONSUMPTION,
+    TARGET_GENERATION,
+    TODAY_OFFSET,
+    feature_row,
+    features_for_household,
+    hourly_window,
+    target_index,
+)
+from app.forecasting.model import (
+    ConformalOffsets,
+    ModelMap,
+    load_conformal,
+    load_models,
+    predict_quantiles,
+)
+from app.simulator.family import NO_OVERRIDE, HouseholdOverride
 from app.simulator.scenarios import Scenario
-
-HOURS_PER_DAY = 24
-
-_MODELS: ModelMap | None = None
-_MODELS_LOADED = False
 
 MODEL_LIGHTGBM = "lightgbm-quantile"
 MODEL_SEASONAL_NAIVE = "seasonal-naive"
 
+_MODELS: ModelMap | None = None
+_CONFORMAL: ConformalOffsets | None = None
 
-def _get_models() -> ModelMap:
-    global _MODELS, _MODELS_LOADED
-    if not _MODELS_LOADED:
+
+def get_models() -> ModelMap:
+    global _MODELS, _CONFORMAL
+    if _MODELS is None:
         _MODELS = load_models()
-        _MODELS_LOADED = True
-    return _MODELS or {}
+        _CONFORMAL = load_conformal()
+    return _MODELS
 
 
 @dataclass(frozen=True, slots=True)
 class HourForecast:
-    horizon_hours: int
-    hour_of_day: float
+    slot: int  # 0 = the hour the session starts in
+    day: date
+    hour_of_day: int
     consumption_p10: float
     consumption_p50: float
     consumption_p90: float
     generation_p10: float
     generation_p50: float
     generation_p90: float
-    net_p50_kw: float
-    recommended_action: str  # "sell" | "buy" | "hold"
-    projected_net_for_market_kw: float
+
+    @property
+    def net_p50_kw(self) -> float:
+        return self.generation_p50 - self.consumption_p50
 
 
-async def _hour_average(
-    session: AsyncSession, household_id: str, hour_index: int, *, tick_minutes: int
-) -> tuple[float, float] | None:
-    """This household's mean consumption/generation over one already-elapsed
-    simulated hour, from its real persisted meter readings — None if that
-    hour hasn't been simulated yet."""
-    if hour_index < 0:
-        return None
-    ticks_per_hour = 60 // tick_minutes
-    start_tick = hour_index * ticks_per_hour
-    rows = (
-        await session.scalars(
-            select(MeterReading).where(
-                MeterReading.household_id == household_id,
-                MeterReading.tick_index >= start_tick,
-                MeterReading.tick_index < start_tick + ticks_per_hour,
-            )
-        )
-    ).all()
-    if len(rows) < ticks_per_hour:
-        return None
-    return (
-        sum(r.consumption_kw for r in rows) / len(rows),
-        sum(r.generation_kw for r in rows) / len(rows),
-    )
-
-
-async def _hour_average_or_estimate(
-    session: AsyncSession,
-    household_id: str,
-    hour_index: int,
-    *,
-    member_count: int,
-    solar_capacity_kwp: float,
-    scenario: Scenario,
-    seed: int,
-    tick_minutes: int,
-) -> tuple[float, float]:
-    """Real history where it exists; the pure simulator standing in for a
-    day that hasn't actually been played yet otherwise — only matters in the
-    first 24 simulated hours of a brand-new deployment, before any real
-    'yesterday' exists to look back on."""
-    real = await _hour_average(session, household_id, hour_index, tick_minutes=tick_minutes)
-    if real is not None:
-        return real
-
-    ticks_per_hour = 60 // tick_minutes
-    base_tick = hour_index * ticks_per_hour
-    cons_total = 0.0
-    gen_total = 0.0
-    for sub in range(ticks_per_hour):
-        tick_index = base_tick + sub
-        cons_total += consumption_kw(
-            household_id,
-            tick_index,
-            member_count=member_count,
-            tick_minutes=tick_minutes,
-            scenario=scenario,
-            seed=seed,
-        )
-        gen_total += generation_kw(
-            tick_index,
-            solar_capacity_kwp=solar_capacity_kwp,
-            tick_minutes=tick_minutes,
-            scenario=scenario,
-        )
-    return cons_total / ticks_per_hour, gen_total / ticks_per_hour
-
-
-async def forecast_household(
-    session: AsyncSession,
+def forecast_household(
     *,
     household_id: str,
     member_count: int,
     solar_capacity_kwp: float,
-    battery: Battery,
-    evening_reserve: float,
-    tick_index: int,
-    tick_minutes: int,
+    start_date: date,
+    start_hour: int,
+    horizon_hours: int,
     scenario: Scenario,
     seed: int,
+    tick_minutes: int = 15,
+    override: HouseholdOverride = NO_OVERRIDE,
 ) -> tuple[str, list[HourForecast]]:
-    """This household's next 1-4 hours. Returns which tier actually served
-    the forecast (`MODEL_LIGHTGBM` or `MODEL_SEASONAL_NAIVE`, the ADR-0004
-    fallback) alongside the hourly forecasts themselves."""
-    now_hour = tick_index // (60 // tick_minutes)
-    family = household_family(household_id, member_count, seed)
-    models = _get_models()
-
-    async def lag(hours_ago: int) -> tuple[float, float]:
-        return await _hour_average_or_estimate(
-            session,
-            household_id,
-            now_hour - hours_ago,
-            member_count=member_count,
-            solar_capacity_kwp=solar_capacity_kwp,
-            scenario=scenario,
-            seed=seed,
-            tick_minutes=tick_minutes,
-        )
-
-    lag_1h, lag_2h, lag_24h = await lag(1), await lag(2), await lag(24)
-    lags = HourlyLags(
-        lag_1h_consumption_kw=lag_1h[0],
-        lag_1h_generation_kw=lag_1h[1],
-        lag_2h_consumption_kw=lag_2h[0],
-        lag_2h_generation_kw=lag_2h[1],
-        lag_24h_consumption_kw=lag_24h[0],
-        lag_24h_generation_kw=lag_24h[1],
+    """`horizon_hours` hourly forecasts starting with the hour that begins at
+    `start_hour` on `start_date`, and which tier served them
+    (`MODEL_LIGHTGBM`, or `MODEL_SEASONAL_NAIVE` — the ADR-0004 fallback)."""
+    if not 1 <= horizon_hours <= MAX_HORIZON_HOURS:
+        msg = f"horizon_hours must be 1-{MAX_HORIZON_HOURS}, got {horizon_hours}"
+        raise ValueError(msg)
+    window = hourly_window(
+        household_id,
+        member_count,
+        solar_capacity_kwp,
+        start_date,
+        scenario,
+        seed,
+        tick_minutes,
+        override,
+        tomorrow_scenario=scenario,
     )
+    family = features_for_household(household_id, member_count, seed)
+    now_index = TODAY_OFFSET + start_hour
+    rows = [
+        feature_row(window, now_index=now_index, horizon_hours=h, family=family, seed=seed)
+        for h in range(1, horizon_hours + 1)
+    ]
 
-    model_name = MODEL_LIGHTGBM if models else MODEL_SEASONAL_NAIVE
-    forecasts: list[HourForecast] = []
-
-    for horizon in HORIZONS_HOURS:
-        target_hour = now_hour + horizon
-        target_hour_of_day = float(target_hour % HOURS_PER_DAY)
-        target_is_weekend = (target_hour // HOURS_PER_DAY) % 7 in (5, 6)
-
-        if models:
-            row = feature_row(
-                family=family,
-                solar_capacity_kwp=solar_capacity_kwp,
-                target_hour_of_day=target_hour_of_day,
-                target_is_weekend=target_is_weekend,
-                horizon_hours=horizon,
-                lags=lags,
+    models = get_models()
+    if models:
+        predictions = predict_quantiles(models, rows, _CONFORMAL)
+        model_name = MODEL_LIGHTGBM
+    else:
+        predictions = []
+        for row in rows:
+            naive = seasonal_naive(row["lag_day_consumption_kw"], row["lag_day_generation_kw"])
+            predictions.append(
+                {
+                    TARGET_CONSUMPTION: dict.fromkeys(("p10", "p50", "p90"), naive.consumption_kw),
+                    TARGET_GENERATION: dict.fromkeys(("p10", "p50", "p90"), naive.generation_kw),
+                }
             )
-            quantiles = predict_quantiles(models, row)
-            cons, gen = quantiles["consumption_kw"], quantiles["generation_kw"]
-        else:
-            baseline = seasonal_naive(lags.lag_24h_consumption_kw, lags.lag_24h_generation_kw)
-            cons = {
-                "p10": baseline.consumption_kw,
-                "p50": baseline.consumption_kw,
-                "p90": baseline.consumption_kw,
-            }
-            gen = {
-                "p10": baseline.generation_kw,
-                "p50": baseline.generation_kw,
-                "p90": baseline.generation_kw,
-            }
+        model_name = MODEL_SEASONAL_NAIVE
 
-        net_p50 = gen["p50"] - cons["p50"]
-        is_evening = not (6.0 <= target_hour_of_day < 18.0)
-        plan = plan_position(
-            battery,
-            net_generation_kw=net_p50,
-            duration_h=1.0,
-            evening_reserve=evening_reserve,
-            is_evening=is_evening,
-        )
-
-        if plan.battery_action is BatteryAction.DISCHARGING and plan.net_for_market_kw > 1e-6:
-            action = "sell"
-        elif plan.net_for_market_kw < -1e-6:
-            action = "buy"
-        else:
-            action = "hold"
-
+    forecasts: list[HourForecast] = []
+    for slot, prediction in enumerate(predictions):
+        target = target_index(now_index, slot + 1)
+        cons, gen = prediction[TARGET_CONSUMPTION], prediction[TARGET_GENERATION]
         forecasts.append(
             HourForecast(
-                horizon_hours=horizon,
-                hour_of_day=target_hour_of_day,
+                slot=slot,
+                day=start_date + timedelta(days=target // HOURS_PER_DAY - 2),
+                hour_of_day=target % HOURS_PER_DAY,
                 consumption_p10=cons["p10"],
                 consumption_p50=cons["p50"],
                 consumption_p90=cons["p90"],
                 generation_p10=gen["p10"],
                 generation_p50=gen["p50"],
                 generation_p90=gen["p90"],
-                net_p50_kw=net_p50,
-                recommended_action=action,
-                projected_net_for_market_kw=plan.net_for_market_kw,
             )
         )
-
     return model_name, forecasts

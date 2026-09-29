@@ -14,7 +14,7 @@ class BaselineForecast:
     generation_kw: float
 
 
-def seasonal_naive(lag_24h_consumption_kw: float, lag_24h_generation_kw: float) -> BaselineForecast:
+def seasonal_naive(lag_day_consumption_kw: float, lag_day_generation_kw: float) -> BaselineForecast:
     return BaselineForecast(
-        consumption_kw=lag_24h_consumption_kw, generation_kw=lag_24h_generation_kw
+        consumption_kw=lag_day_consumption_kw, generation_kw=lag_day_generation_kw
     )

@@ -31,15 +31,9 @@ def _book(draw: st.DrawFn) -> tuple[list[Order], list[Order], dict[str, float]]:
     since a household nets to a single order."""
     n_asks = draw(st.integers(min_value=0, max_value=8))
     n_bids = draw(st.integers(min_value=0, max_value=8))
-    asks = [
-        Order(f"seller{i}", Side.ASK, draw(_kwh), FIT) for i in range(n_asks)
-    ]
-    bids = [
-        Order(f"buyer{i}", Side.BID, draw(_kwh), RETAIL) for i in range(n_bids)
-    ]
-    urgency = {
-        order.household_id: draw(_urgency) for order in (*asks, *bids)
-    }
+    asks = [Order(f"seller{i}", Side.ASK, draw(_kwh), FIT) for i in range(n_asks)]
+    bids = [Order(f"buyer{i}", Side.BID, draw(_kwh), RETAIL) for i in range(n_bids)]
+    urgency = {order.household_id: draw(_urgency) for order in (*asks, *bids)}
     return asks, bids, urgency
 
 

@@ -49,11 +49,10 @@ grid = [
     "numpy>=2.1",
     "pandapower>=2.14",
 ]
-# P4 — agents and LLM providers
+# P4 — agents and LLM providers. Groq, Ollama and the stub are all reached
+# through their OpenAI-compatible HTTP APIs with httpx, so no vendor SDK.
 agents = [
     "langgraph>=0.2.60",
-    "langchain-core>=0.3.28",
-    "groq>=0.15",
     "httpx>=0.28",
 ]
 # Auth
@@ -111,6 +110,8 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # Tests assert, use fixtures positionally, and hardcode throwaway credentials.
 "tests/**/*.py" = ["S101", "ANN201", "ANN001", "ARG001", "S105", "S106"]
+# User-facing agent messages use real typography: an en dash in "2–3 pm".
+"app/agents/speech.py" = ["RUF001"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["app"]
@@ -162,6 +163,7 @@ markers = [
     "property: Hypothesis property-based invariant tests",
     "integration: requires postgres/redis",
     "e2e: full stack",
+    "validation: synthetic data cross-checked against published measurements",
     "slow: excluded from the default run",
 ]
 

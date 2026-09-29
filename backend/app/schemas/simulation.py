@@ -2,29 +2,24 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-from app.simulator.scenarios import Scenario
-
-
-class SimulationStateOut(BaseModel):
-    model_config = {"from_attributes": True}
-
-    tick_index: int
-    running: bool
-    scenario: Scenario
-    seconds_per_tick: float
-    simulated_day: int
-    simulated_hour: float
-    tick_minutes: int
-    updated_at: datetime
+Sky = Literal["clear", "partly cloudy", "overcast", "rain"]
 
 
-class PlayRequest(BaseModel):
-    scenario: Scenario | None = None
-    seconds_per_tick: float | None = Field(default=None, gt=0, le=60)
+class WeatherOut(BaseModel):
+    """The simulated day's Chennai weather, as a household would see it."""
+
+    date: date
+    sky: Sky
+    t_max_c: float
+    t_min_c: float
+    temperature_now_c: float
+    sunrise_h: float
+    sunset_h: float
 
 
 class MeterReadingOut(BaseModel):
@@ -49,34 +44,6 @@ class TradeOut(BaseModel):
     kwh: float
     price_per_kwh: float
     created_at: datetime
-
-
-class HouseholdBalanceOut(BaseModel):
-    household_id: str
-    net_balance: float
-    total_sold_kwh: float
-    total_bought_kwh: float
-
-
-class NegotiationOfferOut(BaseModel):
-    model_config = {"from_attributes": True}
-
-    household_id: str
-    side: str
-    price: float
-    kwh: float
-
-
-class NegotiationRoundOut(BaseModel):
-    round_index: int
-    asks: list[NegotiationOfferOut]
-    bids: list[NegotiationOfferOut]
-    trades: list[TradeOut]
-
-
-class NegotiationTickOut(BaseModel):
-    tick_index: int
-    rounds: list[NegotiationRoundOut]
 
 
 class CurtailmentOut(BaseModel):

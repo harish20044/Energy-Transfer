@@ -1,3 +1,3 @@
-"""The database-backed simulation runner: loads state, calls the pure
-`app.domain.engine.tick.run_tick`, and persists the result — plus the
-background loop that advances it on an accelerated clock while playing."""
+"""The database-backed side of a planning session: set it up, clear its
+market through the pure domain layer, deliver its hours, and settle its
+money."""

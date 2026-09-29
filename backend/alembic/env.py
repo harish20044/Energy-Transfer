@@ -13,7 +13,9 @@ from alembic import context
 # --autogenerate` — it silently generates an empty migration.
 from app.core.db import Base
 from app.core.config import get_settings
+from app.models import agent as _agent  # noqa: F401
 from app.models import household as _household  # noqa: F401
+from app.models import session as _session  # noqa: F401
 from app.models import simulation as _simulation  # noqa: F401
 from app.models import user as _user  # noqa: F401
 

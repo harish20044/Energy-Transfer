@@ -33,9 +33,7 @@ class Household(Base):
     member_count: Mapped[int] = mapped_column(Integer, default=4)
 
     solar_capacity_kwp: Mapped[float] = mapped_column(Float, default=4.0)
-    battery_capacity_kwh: Mapped[float] = mapped_column(
-        Float, default=DEFAULT_BATTERY_CAPACITY_KWH
-    )
+    battery_capacity_kwh: Mapped[float] = mapped_column(Float, default=DEFAULT_BATTERY_CAPACITY_KWH)
     battery_max_charge_kw: Mapped[float] = mapped_column(
         Float, default=DEFAULT_BATTERY_MAX_CHARGE_KW
     )
@@ -43,8 +41,9 @@ class Household(Base):
         Float, default=DEFAULT_BATTERY_MAX_DISCHARGE_KW
     )
 
-    # The one setting a household actually controls from the dashboard — read
-    # by app.domain.battery.policy.plan_position on every tick, not baked in.
+    # The one setting a household actually controls from the dashboard: the
+    # battery level its agent never sells stored charge below (read by
+    # app.agents.household_agent when it plans every session).
     evening_reserve: Mapped[float] = mapped_column(Float, default=DEFAULT_EVENING_RESERVE)
 
     # The battery's live state of charge, carried from one tick to the next —

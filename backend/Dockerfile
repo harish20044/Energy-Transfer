@@ -33,7 +33,7 @@ FROM base AS development
 # that editing source does not invalidate the (slow) dependency install layer.
 COPY pyproject.toml README.md ./
 RUN mkdir -p app && touch app/__init__.py \
-    && pip install -e ".[dev,db,auth,ml]"
+    && pip install -e ".[dev,db,auth,ml,agents]"
 
 COPY app ./app
 COPY tests ./tests
@@ -57,7 +57,7 @@ RUN groupadd --system --gid 1001 energy \
 
 COPY pyproject.toml README.md ./
 RUN mkdir -p app && touch app/__init__.py \
-    && pip install --no-cache-dir ".[db,auth,ml]"
+    && pip install --no-cache-dir ".[db,auth,ml,agents]"
 
 COPY --chown=energy:energy app ./app
 COPY --chown=energy:energy alembic ./alembic

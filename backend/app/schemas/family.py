@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel
 
 
@@ -17,14 +19,18 @@ class HouseDesignOut(BaseModel):
 class FamilyMemberOut(BaseModel):
     index: int
     age: int
-    role: str
+    role: str  # parent | child | grandparent | guest
+    occupation: str
     room: int | None
+    status: Literal["home", "away", "asleep"]
     home_now: bool
 
 
 class RoomStatusOut(BaseModel):
     room: int
     occupied: bool
+    ac_on: bool
+    ac_kw: float
     ac_intensity: float
 
 
@@ -32,3 +38,5 @@ class FamilyOut(BaseModel):
     house: HouseDesignOut
     members: list[FamilyMemberOut]
     rooms: list[RoomStatusOut]
+    # What the house is drawing right now, by appliance group, kW.
+    appliance_kw: dict[str, float]

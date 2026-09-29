@@ -175,24 +175,3 @@ async def test_evening_reserve_update_rejects_an_out_of_range_value(
     )
 
     assert response.status_code == 422
-
-
-async def test_forecast_returns_one_entry_per_declared_horizon(
-    api_client: AsyncClient, make_household_account: Callable[..., Awaitable[HouseholdAccount]]
-) -> None:
-    account = await make_household_account()
-    token = await _login(api_client, account["email"], account["password"])
-
-    response = await api_client.get(
-        "/api/v1/households/me/forecast", headers={"Authorization": f"Bearer {token}"}
-    )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["household_id"] == account["household_id"]
-    assert body["model"] in ("lightgbm-quantile", "seasonal-naive")
-    assert [hour["horizon_hours"] for hour in body["hours"]] == [1, 2, 3, 4]
-    for hour in body["hours"]:
-        assert hour["consumption_p10"] <= hour["consumption_p50"] <= hour["consumption_p90"]
-        assert hour["generation_p10"] <= hour["generation_p50"] <= hour["generation_p90"]
-        assert hour["recommended_action"] in ("buy", "sell", "hold")

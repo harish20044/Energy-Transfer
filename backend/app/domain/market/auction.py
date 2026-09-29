@@ -52,12 +52,13 @@ def clear_uniform_price(
     range.
 
     The clearing price is bounded to ``[feed_in_tariff, retail_tariff]`` by
-    construction, not by clamping after the fact: a caller using
-    ``battery.policy.reservation_price`` never produces an ask below the
-    feed-in tariff or a bid above the retail tariff, so any crossing price is
-    already inside that band. That is what turns objective O6 — no
-    participant ends up worse off than dealing with the utility directly —
-    into a structural guarantee instead of an empirical observation.
+    construction, not by clamping after the fact: every order reaching it
+    (through `app.domain.market.slot_market`, which clamps each agent's limit
+    into the band) asks no less than the feed-in tariff and bids no more than
+    the retail tariff, so any crossing price is already inside that band.
+    That is what turns objective O6 — no participant ends up worse off than
+    dealing with the utility directly — into a structural guarantee instead
+    of an empirical observation.
     """
     sorted_asks = sorted(asks, key=lambda order: order.limit_price)
     sorted_bids = sorted(bids, key=lambda order: order.limit_price, reverse=True)
@@ -92,8 +93,8 @@ def clear_uniform_price(
 
     # Split-the-difference at the margin. Guaranteed inside the tariff band:
     # last_ask_price >= feed_in_tariff and last_bid_price <= retail_tariff
-    # hold for every order the caller constructs via reservation_price(), so
-    # their average does too — the max/min below is a defensive floor/ceiling
+    # hold for every order slot_market builds (it clamps limits to the band),
+    # so their average does too — the max/min below is a defensive floor/ceiling
     # for callers that don't go through that helper, not the source of truth.
     clearing_price = (last_ask_price + last_bid_price) / 2
     clearing_price = max(feed_in_tariff, min(retail_tariff, clearing_price))

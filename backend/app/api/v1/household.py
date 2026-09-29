@@ -9,39 +9,32 @@ than a structural impossibility.
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from datetime import timedelta
 
 from fastapi import APIRouter, HTTPException, Query, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUserDep, DbDep, SettingsDep
-from app.domain.battery.model import Battery
-from app.engine.runner import get_or_create_state
-from app.forecasting.predict import forecast_household
+from app.api.v1.session import agent_message, clock_hours
+from app.engine.session import get_or_create_state, household_day, override_of
+from app.engine.statement import statements
+from app.forecasting.predict import MODEL_LIGHTGBM, MODEL_SEASONAL_NAIVE, get_models
+from app.models.agent import AgentDecisionRecord
 from app.models.household import Household
-from app.models.simulation import LedgerEntryRecord, MeterReading, TradeRecord
+from app.models.session import SessionForecast, SessionHousehold, SessionPosition
+from app.models.simulation import MeterReading, TradeRecord
 from app.schemas.family import FamilyMemberOut, FamilyOut, HouseDesignOut, RoomStatusOut
-from app.schemas.forecast import ForecastOut, HourForecastOut
 from app.schemas.household import EveningReserveUpdate, HouseholdPublic
-from app.schemas.simulation import HouseholdBalanceOut, MeterReadingOut, TradeOut
-from app.simulator.family import (
-    AC_UNITS,
-    BEDROOMS,
-    HALLS,
-    WASHROOMS,
-    generate_family,
-    snapshot_occupancy,
-)
-from app.simulator.profiles import hour_of_day, is_weekend
-from app.simulator.scenarios import Scenario, profile_for
+from app.schemas.session import HourForecastOut, OwnSessionOut, OwnSlotOut
+from app.schemas.simulation import MeterReadingOut, TradeOut
+from app.simulator.family import AC_UNITS, BEDROOMS, HALLS, WASHROOMS, HouseholdOverride, Status
+from app.simulator.household import AC_MAX_KW, AC_MIN_KW
+from app.simulator.scenarios import Scenario
 
 router = APIRouter(prefix="/households", tags=["households"])
 
-# A household with no battery still needs a *valid* one to plug into the
-# domain layer's Battery dataclass (which requires capacity_kwh > 0) — see
-# the identical constant and rationale in app.engine.runner.
-_NO_BATTERY_CAPACITY_KWH = 0.01
+_STATUS_LABEL = {Status.HOME: "home", Status.AWAY: "away", Status.ASLEEP: "asleep"}
 
 
 async def _own_household(current_user: CurrentUserDep, db: AsyncSession) -> Household:
@@ -66,8 +59,8 @@ async def read_own_household(current_user: CurrentUserDep, db: DbDep) -> Househo
 async def update_evening_reserve(
     body: EveningReserveUpdate, current_user: CurrentUserDep, db: DbDep
 ) -> Household:
-    """Change the one dial a household actually controls — read by the
-    battery policy on every tick, not decorative."""
+    """Change the reserve: the battery level the household's agent never
+    sells stored charge below. Takes effect from the next planned session."""
     household = await _own_household(current_user, db)
     household.evening_reserve = body.evening_reserve
     await db.flush()
@@ -80,7 +73,8 @@ async def read_own_readings(
     db: DbDep,
     limit: int = Query(default=96, ge=1, le=1000),
 ) -> list[MeterReading]:
-    """This household's own meter history, most recent tick first."""
+    """This household's delivered meter intervals this session, most recent
+    first."""
     household = await _own_household(current_user, db)
     rows = await db.scalars(
         select(MeterReading)
@@ -95,9 +89,9 @@ async def read_own_readings(
 async def read_own_trades(
     current_user: CurrentUserDep,
     db: DbDep,
-    limit: int = Query(default=50, ge=1, le=1000),
+    limit: int = Query(default=100, ge=1, le=1000),
 ) -> list[TradeRecord]:
-    """Every settled trade this household was a party to, either side."""
+    """Every neighbour trade this household made this session, either side."""
     household = await _own_household(current_user, db)
     rows = await db.scalars(
         select(TradeRecord)
@@ -107,57 +101,47 @@ async def read_own_trades(
                 TradeRecord.seller_household_id == household.id,
             )
         )
-        .order_by(TradeRecord.tick_index.desc())
+        .order_by(TradeRecord.tick_index, TradeRecord.id)
         .limit(limit)
     )
     return list(rows)
-
-
-@router.get("/me/balance", response_model=HouseholdBalanceOut)
-async def read_own_balance(current_user: CurrentUserDep, db: DbDep) -> HouseholdBalanceOut:
-    """Net settlement position from the hash-chained ledger: positive means
-    this household has been paid more than it has spent."""
-    household = await _own_household(current_user, db)
-
-    sold = await db.execute(
-        select(
-            func.coalesce(func.sum(LedgerEntryRecord.total_amount), 0.0),
-            func.coalesce(func.sum(LedgerEntryRecord.kwh), 0.0),
-        ).where(LedgerEntryRecord.seller_household_id == household.id)
-    )
-    sold_amount, sold_kwh = sold.one()
-
-    bought = await db.execute(
-        select(
-            func.coalesce(func.sum(LedgerEntryRecord.total_amount), 0.0),
-            func.coalesce(func.sum(LedgerEntryRecord.kwh), 0.0),
-        ).where(LedgerEntryRecord.buyer_household_id == household.id)
-    )
-    bought_amount, bought_kwh = bought.one()
-
-    return HouseholdBalanceOut(
-        household_id=household.id,
-        net_balance=sold_amount - bought_amount,
-        total_sold_kwh=sold_kwh,
-        total_bought_kwh=bought_kwh,
-    )
 
 
 @router.get("/me/family", response_model=FamilyOut)
 async def read_own_family(
     current_user: CurrentUserDep, db: DbDep, settings: SettingsDep
 ) -> FamilyOut:
-    """This household's own family and live room occupancy — who's actually
-    home right now, and which of the house's 4 bedroom ACs that's running."""
+    """This household's family and what's happening in the house at the
+    session's current moment — who's home, away or asleep, which bedroom ACs
+    are running, and what every appliance group is drawing."""
     household = await _own_household(current_user, db)
     state = await get_or_create_state(db)
+    tick_minutes = settings.market_tick_minutes
+    clock = clock_hours(state, tick_minutes)
+    if state.status == "complete":
+        clock -= tick_minutes / 60.0  # the last delivered interval, not the one after
+    setup = await db.get(SessionHousehold, household.id)
+    override = override_of(setup) if setup else HouseholdOverride()
+    day = state.sim_date + timedelta(days=int(clock // 24))
+    hd = household_day(
+        household,
+        day,
+        sim_date=state.sim_date,
+        scenario=Scenario(state.scenario),
+        override=override,
+        seed=settings.sim_seed,
+        tick_minutes=tick_minutes,
+    )
+    slot = int((clock % 24) * 60 // tick_minutes)
+    family = hd.family
+    statuses = [Status(int(hd.statuses[i, slot])) for i in range(len(family.members))]
 
-    hour = hour_of_day(state.tick_index, tick_minutes=settings.market_tick_minutes)
-    weekend = is_weekend(state.tick_index, tick_minutes=settings.market_tick_minutes)
-    scenario = Scenario(state.scenario)
-
-    family = generate_family(household.id, household.member_count, settings.sim_seed)
-    snapshot = snapshot_occupancy(family, hour, weekend, profile_for(scenario).demand_factor)
+    def room_occupied(room: int) -> bool:
+        asleep_here = any(
+            member.sleeping_room == room and statuses[i] is Status.ASLEEP
+            for i, member in enumerate(family.members)
+        )
+        return asleep_here or float(hd.room_ac_kw[room - 1, slot]) > 0
 
     return FamilyOut(
         house=HouseDesignOut(
@@ -168,52 +152,126 @@ async def read_own_family(
                 index=member.index,
                 age=member.age,
                 role=member.role.value,
+                occupation=member.occupation.value,
                 room=member.room,
-                home_now=snapshot.home_now[member.index],
+                status=_STATUS_LABEL[statuses[i]],  # type: ignore[arg-type]
+                home_now=statuses[i] is not Status.AWAY,
             )
-            for member in family.members
+            for i, member in enumerate(family.members)
         ],
         rooms=[
-            RoomStatusOut(room=room.room, occupied=room.occupied, ac_intensity=room.ac_intensity)
-            for room in snapshot.rooms
+            RoomStatusOut(
+                room=room,
+                occupied=room_occupied(room),
+                ac_on=float(hd.room_ac_kw[room - 1, slot]) >= 0.5 * AC_MIN_KW,
+                ac_kw=float(hd.room_ac_kw[room - 1, slot]),
+                ac_intensity=min(1.0, float(hd.room_ac_kw[room - 1, slot]) / AC_MAX_KW),
+            )
+            for room in range(1, BEDROOMS + 1)
         ],
+        appliance_kw={name: float(values[slot]) for name, values in hd.breakdown.items()},
     )
 
 
-@router.get("/me/forecast", response_model=ForecastOut)
-async def read_own_forecast(
+@router.get("/me/session", response_model=OwnSessionOut)
+async def read_own_session(
     current_user: CurrentUserDep, db: DbDep, settings: SettingsDep
-) -> ForecastOut:
-    """Next 1-4 hours: predicted consumption/generation (P10/P50/P90) and a
-    buy/sell/hold call per hour, from the trained LightGBM quantile
-    forecaster (ADR-0004) — or the seasonal-naive baseline if models aren't
-    available in this environment."""
+) -> OwnSessionOut:
+    """This household's session, hour by hour: its forecast (P10/P50/P90),
+    what its agent decided and said, what it traded with neighbours and the
+    EB, what actually happened once delivered — and its money, planned and
+    delivered, kept as separate earned and paid figures."""
     household = await _own_household(current_user, db)
     state = await get_or_create_state(db)
+    tick_minutes = settings.market_tick_minutes
+    ticks_per_hour = 60 // tick_minutes
+    hours = tick_minutes / 60.0
+    forecasts = {
+        f.slot: f
+        for f in (
+            await db.scalars(
+                select(SessionForecast).where(SessionForecast.household_id == household.id)
+            )
+        ).all()
+    }
+    positions = {
+        p.slot: p
+        for p in (
+            await db.scalars(
+                select(SessionPosition).where(SessionPosition.household_id == household.id)
+            )
+        ).all()
+    }
+    decisions = {
+        d.slot: d
+        for d in (
+            await db.scalars(
+                select(AgentDecisionRecord).where(AgentDecisionRecord.household_id == household.id)
+            )
+        ).all()
+    }
+    readings = (
+        await db.scalars(select(MeterReading).where(MeterReading.household_id == household.id))
+    ).all()
+    delivered_hours = state.tick_index // ticks_per_hour
 
-    has_battery = household.battery_capacity_kwh > 0
-    battery = Battery(
-        capacity_kwh=household.battery_capacity_kwh if has_battery else _NO_BATTERY_CAPACITY_KWH,
-        soc=household.battery_soc,
-        max_charge_kw=household.battery_max_charge_kw,
-        max_discharge_kw=household.battery_max_discharge_kw,
-    )
+    slots: list[OwnSlotOut] = []
+    for slot in sorted(forecasts):
+        f, p = forecasts[slot], positions.get(slot)
+        if p is None:
+            continue
+        in_slot = sorted(
+            (r for r in readings if r.tick_index // ticks_per_hour == slot),
+            key=lambda r: r.tick_index,
+        )
+        delivered = slot < delivered_hours and bool(in_slot)
+        decision = decisions.get(slot)
+        slots.append(
+            OwnSlotOut(
+                slot=slot,
+                hour_of_day=f.hour_of_day,
+                forecast=HourForecastOut(
+                    slot=slot,
+                    day=f.day,
+                    hour_of_day=f.hour_of_day,
+                    consumption_p10=f.consumption_p10,
+                    consumption_p50=f.consumption_p50,
+                    consumption_p90=f.consumption_p90,
+                    generation_p10=f.generation_p10,
+                    generation_p50=f.generation_p50,
+                    generation_p90=f.generation_p90,
+                ),
+                p2p_sold_kwh=p.p2p_sold_kwh,
+                p2p_bought_kwh=p.p2p_bought_kwh,
+                eb_bought_kwh=p.eb_bought_kwh,
+                eb_sold_kwh=p.eb_sold_kwh,
+                retail_tariff=p.retail_tariff,
+                feed_in_tariff=p.feed_in_tariff,
+                eb_available=p.eb_available,
+                decision=agent_message(decision, household.display_name) if decision else None,
+                delivered=delivered,
+                actual_consumption_kwh=sum(r.consumption_kw for r in in_slot) * hours
+                if delivered
+                else None,
+                actual_generation_kwh=sum(r.generation_kw for r in in_slot) * hours
+                if delivered
+                else None,
+                actual_eb_import_kwh=sum(max(0.0, r.grid_kwh) for r in in_slot)
+                if delivered
+                else None,
+                actual_eb_export_kwh=sum(max(0.0, -r.grid_kwh) for r in in_slot)
+                if delivered
+                else None,
+                actual_unserved_kwh=sum(r.unserved_kwh for r in in_slot) if delivered else None,
+                battery_soc_end=in_slot[-1].battery_soc if delivered else None,
+            )
+        )
 
-    model_name, hours = await forecast_household(
-        db,
+    planned, delivered_statement = await statements(db, state, household, tick_minutes=tick_minutes)
+    return OwnSessionOut(
         household_id=household.id,
-        member_count=household.member_count,
-        solar_capacity_kwp=household.solar_capacity_kwp,
-        battery=battery,
-        evening_reserve=household.evening_reserve,
-        tick_index=state.tick_index,
-        tick_minutes=settings.market_tick_minutes,
-        scenario=Scenario(state.scenario),
-        seed=settings.sim_seed,
-    )
-
-    return ForecastOut(
-        household_id=household.id,
-        model=model_name,
-        hours=[HourForecastOut(**asdict(hour)) for hour in hours],
+        model=MODEL_LIGHTGBM if get_models() else MODEL_SEASONAL_NAIVE,
+        slots=slots,
+        planned=planned,
+        delivered=delivered_statement,
     )
