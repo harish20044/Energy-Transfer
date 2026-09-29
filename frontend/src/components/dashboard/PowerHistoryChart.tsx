@@ -25,13 +25,11 @@ export function PowerHistoryChart({
   tickMinutes: number;
 }) {
   // readings arrive most-recent-first; the chart reads left-to-right in time.
-  const data = [...readings]
-    .reverse()
-    .map((reading) => ({
-      time: simClock((reading.tick_index * tickMinutes) / 60),
-      generation: Number(reading.generation_kw.toFixed(2)),
-      consumption: Number(reading.consumption_kw.toFixed(2)),
-    }));
+  const data = [...readings].reverse().map((reading) => ({
+    time: simClock((reading.tick_index * tickMinutes) / 60),
+    generation: Number(reading.generation_kw.toFixed(2)),
+    consumption: Number(reading.consumption_kw.toFixed(2)),
+  }));
 
   return (
     <div className="h-[220px] w-full">

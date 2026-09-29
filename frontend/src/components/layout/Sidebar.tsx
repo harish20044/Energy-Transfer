@@ -4,7 +4,6 @@ import { NavLink } from 'react-router-dom';
 import { useAuth } from '@/auth/useAuth';
 import { NAV_GROUPS } from '@/components/layout/navigation';
 import { cn } from '@/lib/cn';
-import { ownMarketKw } from '@/lib/energy';
 import { kw, percent } from '@/lib/format';
 import { useLiveData } from '@/live/useLiveData';
 
@@ -18,14 +17,16 @@ function initials(name: string): string {
 
 export function Sidebar() {
   const { user, logout } = useAuth();
-  const { household, readings, trades, simulation } = useLiveData();
+  const { readings, own, session } = useLiveData();
 
+  // The neighbour contract for the hour most recently delivered: + sold, - bought.
   const latest = readings[0];
-  const exportingKw =
-    latest !== undefined && simulation !== null
-      ? Math.max(0, ownMarketKw(trades, household?.id ?? '', latest.tick_index, simulation.tick_minutes))
-      : 0;
-  const batterySocPct = latest !== undefined ? latest.battery_soc * 100 : 0;
+  const ticksPerHour = session !== null ? 60 / session.tick_minutes : 4;
+  const slot =
+    latest !== undefined ? own?.slots[Math.floor(latest.tick_index / ticksPerHour)] : undefined;
+  const neighbourKw = slot !== undefined ? slot.p2p_sold_kwh - slot.p2p_bought_kwh : 0;
+  const startSoc = session?.households.find((h) => h.household_id === own?.household_id)?.start_soc;
+  const batterySocPct = (latest?.battery_soc ?? startSoc ?? 0) * 100;
 
   return (
     <aside className="flex w-64 shrink-0 flex-col border-r border-stone-200 bg-white">
@@ -72,9 +73,11 @@ export function Sidebar() {
       <div className="flex flex-col gap-3 border-t border-stone-200 p-4">
         <div className="rounded-lg bg-stone-50 p-3">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-stone-500">Exporting now</span>
+            <span className="text-xs font-medium text-stone-500">
+              {neighbourKw < 0 ? 'Buying from neighbours' : 'Selling to neighbours'}
+            </span>
             <span className="font-mono text-xs font-semibold text-peer-600 tnum">
-              {kw(exportingKw)}
+              {kw(Math.abs(neighbourKw))}
             </span>
           </div>
           <div className="mt-2 flex items-center justify-between">

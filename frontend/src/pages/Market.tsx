@@ -1,30 +1,29 @@
-import { Gauge, Scale, TrendingUp, Users } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Bot, Landmark, PlugZap, Scale, TrendingUp, Zap } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
+  Bar,
   CartesianGrid,
+  ComposedChart,
+  Legend,
   Line,
-  LineChart,
-  ReferenceArea,
-  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts';
 
-import type { Curtailment, MarketTrade, NegotiationRound } from '@/api/simulation';
-import { fetchNegotiation, fetchRecentCurtailments, fetchRecentTrades } from '@/api/simulation';
+import type { Offer, SlotMarket } from '@/api/session';
+import { fetchSlotMarket } from '@/api/session';
 import { useAuth } from '@/auth/useAuth';
 import { Badge } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
 import { StatTile } from '@/components/ui/StatTile';
 import { cn } from '@/lib/cn';
-import { inr, kwh } from '@/lib/format';
+import { hourLabel, inr, kwh } from '@/lib/format';
 import { householdLabel } from '@/lib/household';
-import { FEED_IN_TARIFF, RETAIL_TARIFF } from '@/lib/tariffs';
+import { strategyMeta } from '@/lib/session';
 import { useLiveData } from '@/live/useLiveData';
-
-const AUTO_ADVANCE_MS = 1400;
 
 function OfferColumn({
   title,
@@ -33,18 +32,18 @@ function OfferColumn({
   matchedIds,
 }: {
   title: string;
-  offers: { household_id: string; price: number; kwh: number }[];
+  offers: Offer[];
   tone: 'ask' | 'bid';
   matchedIds: Set<string>;
 }) {
   return (
     <div className="flex flex-col">
-      <div className="flex items-center justify-between px-5 pb-2 text-[11px] font-semibold tracking-wider text-stone-400 uppercase">
+      <div className="flex items-center justify-between px-1 pb-2 text-[11px] font-semibold tracking-wider text-stone-400 uppercase">
         <span>{title}</span>
         <span>Units @ ₹/unit</span>
       </div>
       {offers.length === 0 ? (
-        <p className="px-5 py-3 text-xs text-stone-400">Nobody on this side this tick.</p>
+        <p className="px-1 py-3 text-xs text-stone-400">Nobody on this side in this round.</p>
       ) : (
         <ul>
           {offers.map((offer) => {
@@ -53,8 +52,8 @@ function OfferColumn({
               <li
                 key={offer.household_id}
                 className={cn(
-                  'flex items-center justify-between px-5 py-1.5 text-sm',
-                  matched && 'bg-battery-50/60 font-semibold',
+                  'flex items-center justify-between rounded px-1 py-1.5 text-sm',
+                  matched && 'bg-battery-50 font-semibold',
                 )}
               >
                 <span className="text-stone-700">{householdLabel(offer.household_id)}</span>
@@ -68,7 +67,6 @@ function OfferColumn({
                   >
                     {inr(offer.price)}
                   </span>
-                  {matched && <span className="text-[10px] font-bold text-battery-600">✓</span>}
                 </span>
               </li>
             );
@@ -81,227 +79,309 @@ function OfferColumn({
 
 export function Market() {
   const { accessToken } = useAuth();
-  const { simulation } = useLiveData();
-  const [rounds, setRounds] = useState<NegotiationRound[]>([]);
-  const [negotiationTick, setNegotiationTick] = useState<number | null>(null);
-  const [selectedRound, setSelectedRound] = useState(0);
-  const [autoAdvance, setAutoAdvance] = useState(true);
-  const [recentTrades, setRecentTrades] = useState<MarketTrade[]>([]);
-  const [curtailments, setCurtailments] = useState<Curtailment[]>([]);
-  const lastLoadedTick = useRef<number | null>(null);
+  const { session, overview, version } = useLiveData();
+  const [slot, setSlot] = useState(0);
+  const [market, setMarket] = useState<SlotMarket | null>(null);
+  const [round, setRound] = useState(0);
 
-  const completedTick = simulation !== null && simulation.tick_index > 0 ? simulation.tick_index - 1 : null;
-
-  // Load the latest completed tick's negotiation exactly once per tick, not
-  // on every 1s poll — the round replay below owns its own pacing.
   useEffect(() => {
-    if (accessToken === null || completedTick === null) return;
-    if (lastLoadedTick.current === completedTick) return;
-    lastLoadedTick.current = completedTick;
-
-    fetchNegotiation(accessToken, completedTick)
+    if (accessToken === null || overview.length === 0) {
+      setMarket(null);
+      return;
+    }
+    const controller = new AbortController();
+    fetchSlotMarket(accessToken, Math.min(slot, overview.length - 1), controller.signal)
       .then((data) => {
-        setRounds(data.rounds);
-        setNegotiationTick(data.tick_index);
-        setSelectedRound(0);
+        setMarket(data);
+        setRound(Math.max(0, data.rounds.length - 1));
       })
       .catch(() => {
-        setRounds([]);
+        setMarket(null);
       });
-  }, [accessToken, completedTick]);
-
-  useEffect(() => {
-    if (accessToken === null) return;
-    const controller = new AbortController();
-    fetchRecentTrades(accessToken, 60, controller.signal).then(setRecentTrades).catch(() => undefined);
-    fetchRecentCurtailments(accessToken, 20, controller.signal).then(setCurtailments).catch(() => undefined);
     return () => {
       controller.abort();
     };
-  }, [accessToken, simulation?.tick_index]);
+  }, [accessToken, slot, overview.length, version]);
 
-  useEffect(() => {
-    if (!autoAdvance || rounds.length <= 1) return;
-    const timer = setInterval(() => {
-      setSelectedRound((round) => (round + 1) % rounds.length);
-    }, AUTO_ADVANCE_MS);
-    return () => {
-      clearInterval(timer);
-    };
-  }, [autoAdvance, rounds.length]);
+  const chartData = useMemo(
+    () =>
+      overview.map((row) => ({
+        hour: hourLabel(row.hour_of_day),
+        p2p: row.p2p_kwh,
+        ebIn: row.eb_bought_kwh,
+        ebOut: row.eb_sold_kwh,
+        price: row.p2p_avg_price,
+      })),
+    [overview],
+  );
 
-  const current = rounds[selectedRound];
-  const matchedIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const trade of current?.trades ?? []) {
-      ids.add(trade.seller_household_id);
-      ids.add(trade.buyer_household_id);
-    }
-    return ids;
-  }, [current]);
+  if (session === null || session.status === 'setup' || overview.length === 0) {
+    return (
+      <div className="flex h-64 flex-col items-center justify-center gap-3 text-sm text-stone-400">
+        No market yet — plan a session first.
+        <Link to="/session" className="rounded-lg bg-peer-600 px-3 py-1.5 font-semibold text-white">
+          Plan a session
+        </Link>
+      </div>
+    );
+  }
 
-  const thisTickTrades = recentTrades.filter((t) => t.tick_index === completedTick);
-  const matchedKwh = thisTickTrades.reduce((sum, t) => sum + t.kwh, 0);
-  const lastPrice = thisTickTrades.at(-1)?.price_per_kwh ?? null;
-  const curtailedThisTick = curtailments
-    .filter((c) => c.tick_index === completedTick)
-    .reduce((sum, c) => sum + c.curtailed_kwh, 0);
-
-  const priceHistory = recentTrades
-    .slice()
-    .reverse()
-    .map((t, i) => ({ x: i, tick: t.tick_index, price: t.price_per_kwh }));
+  const row = overview[Math.min(slot, overview.length - 1)];
+  const current = market?.rounds[round];
+  const matchedIds = new Set<string>();
+  for (const t of current?.trades ?? []) {
+    matchedIds.add(t.seller_household_id);
+    matchedIds.add(t.buyer_household_id);
+  }
+  const totalP2p = overview.reduce((s, r) => s + r.p2p_kwh, 0);
+  const totalEbIn = overview.reduce((s, r) => s + r.eb_bought_kwh, 0);
 
   return (
     <div className="mx-auto flex max-w-[1400px] flex-col gap-5">
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatTile
-          label="Last clearing price"
-          value={lastPrice !== null ? inr(lastPrice) : '—'}
-          caption={`between ₹${FEED_IN_TARIFF.toFixed(2)} and ₹${RETAIL_TARIFF.toFixed(2)}`}
-          icon={TrendingUp}
-          tone="peer"
-        />
-        <StatTile
-          label="Matched this tick"
-          value={kwh(matchedKwh)}
-          caption={negotiationTick !== null ? `Tick ${String(negotiationTick)}` : 'Waiting for a tick'}
-          icon={Scale}
-          tone="battery"
-        />
-        <StatTile
-          label="Negotiating"
-          value={String((current?.asks.length ?? 0) + (current?.bids.length ?? 0))}
-          caption={`${String(current?.asks.length ?? 0)} sellers · ${String(current?.bids.length ?? 0)} buyers`}
-          icon={Users}
-          tone="neutral"
-        />
-        <StatTile
-          label="Curtailed by safety"
-          value={kwh(curtailedThisTick)}
-          caption="grid safety veto, this tick"
-          icon={Gauge}
-          tone="grid"
-        />
-      </div>
-
       <Card
-        title="Watch them negotiate"
-        subtitle="Round 0 opens at each side's most favourable price; each round after, both sides concede toward their reservation price"
-        action={
-          rounds.length > 0 ? (
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setAutoAdvance((v) => !v);
-                }}
-                className={cn(
-                  'rounded-lg px-2.5 py-1 text-xs font-semibold',
-                  autoAdvance ? 'bg-stone-900 text-white' : 'border border-stone-200 text-stone-600',
-                )}
-              >
-                {autoAdvance ? 'Auto-playing' : 'Paused'}
-              </button>
-            </div>
-          ) : undefined
-        }
-      >
-        {rounds.length === 0 ? (
-          <p className="py-8 text-center text-sm text-stone-400">
-            No trading activity yet this tick — press Play or Step on a tick with real surplus or
-            shortfall.
-          </p>
-        ) : (
-          <div className="flex flex-col gap-4">
-            <div className="flex flex-wrap gap-1.5">
-              {rounds.map((round) => (
-                <button
-                  key={round.round_index}
-                  type="button"
-                  onClick={() => {
-                    setAutoAdvance(false);
-                    setSelectedRound(round.round_index);
-                  }}
-                  className={cn(
-                    'rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors',
-                    round.round_index === selectedRound
-                      ? 'bg-peer-600 text-white'
-                      : 'bg-stone-100 text-stone-600 hover:bg-stone-200',
-                    round.trades.length > 0 && round.round_index !== selectedRound && 'ring-2 ring-battery-300',
-                  )}
-                >
-                  Round {round.round_index + 1}
-                  {round.trades.length > 0 ? ` · ${String(round.trades.length)} matched` : ''}
-                </button>
-              ))}
-            </div>
-
-            <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-              <OfferColumn title="Asks · sellers" offers={current?.asks ?? []} tone="ask" matchedIds={matchedIds} />
-              <OfferColumn title="Bids · buyers" offers={current?.bids ?? []} tone="bid" matchedIds={matchedIds} />
-            </div>
-
-            {current !== undefined && current.trades.length > 0 && (
-              <div className="rounded-lg bg-stone-900 px-4 py-3">
-                <p className="text-xs font-semibold text-stone-300">Matched this round</p>
-                <ul className="mt-1.5 flex flex-col gap-1">
-                  {current.trades.map((trade, i) => (
-                    <li key={i} className="flex items-center justify-between text-sm text-white">
-                      <span>
-                        {householdLabel(trade.seller_household_id)} → {householdLabel(trade.buyer_household_id)}
-                      </span>
-                      <span className="font-mono tnum">
-                        {trade.kwh.toFixed(2)} units @ {inr(trade.price_per_kwh)}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-        )}
-      </Card>
-
-      <Card
-        title="Recent clearing prices"
-        subtitle="Every settled trade across the whole feeder — no two trades have to settle at the same price anymore"
-        action={<Badge tone="peer">Multi-round negotiation</Badge>}
+        title="The whole feeder, hour by hour"
+        subtitle={`${kwh(totalP2p)} traded between neighbours · ${kwh(totalEbIn)} bought from the EB over the session`}
+        action={<Badge tone="peer">Click an hour for its market</Badge>}
       >
         <div className="h-[240px] w-full">
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={priceHistory} margin={{ top: 8, right: 8, bottom: 0, left: -20 }}>
-              <ReferenceArea y1={FEED_IN_TARIFF} y2={RETAIL_TARIFF} fill="#6366f1" fillOpacity={0.05} />
-              <ReferenceLine
-                y={RETAIL_TARIFF}
-                stroke="#e11d48"
-                strokeDasharray="4 4"
-                label={{ value: `Retail ₹${RETAIL_TARIFF.toFixed(2)}`, position: 'insideTopRight', fontSize: 11, fill: '#e11d48' }}
-              />
-              <ReferenceLine
-                y={FEED_IN_TARIFF}
-                stroke="#059669"
-                strokeDasharray="4 4"
-                label={{ value: `Feed-in ₹${FEED_IN_TARIFF.toFixed(2)}`, position: 'insideBottomRight', fontSize: 11, fill: '#059669' }}
-              />
+            <ComposedChart
+              data={chartData}
+              margin={{ top: 8, right: 8, bottom: 0, left: -12 }}
+              onClick={(state) => {
+                const index = Number(state.activeTooltipIndex);
+                if (Number.isFinite(index)) setSlot(index);
+              }}
+            >
               <CartesianGrid stroke="#e7e5e4" strokeDasharray="3 3" vertical={false} />
-              <XAxis
-                dataKey="tick"
+              <XAxis dataKey="hour" tick={{ fontSize: 11, fill: '#78716c' }} tickLine={false} />
+              <YAxis
+                yAxisId="units"
                 tick={{ fontSize: 11, fill: '#78716c' }}
                 tickLine={false}
-                axisLine={{ stroke: '#e7e5e4' }}
+                axisLine={false}
+                width={40}
               />
-              <YAxis domain={[2.5, 8.5]} tick={{ fontSize: 11, fill: '#78716c' }} tickLine={false} axisLine={false} width={48} />
+              <YAxis
+                yAxisId="price"
+                orientation="right"
+                domain={[0, 'auto']}
+                tick={{ fontSize: 11, fill: '#78716c' }}
+                tickLine={false}
+                axisLine={false}
+                width={40}
+              />
               <Tooltip
                 contentStyle={{ borderRadius: 8, border: '1px solid #e7e5e4', fontSize: 12 }}
-                formatter={(value: unknown) => [inr(Number(value)), 'Price']}
-                labelFormatter={(value: unknown) => `Tick ${String(value)}`}
+                formatter={(value: unknown, name: unknown) => [
+                  name === 'P2P price' ? inr(Number(value)) : kwh(Number(value)),
+                  String(name),
+                ]}
               />
-              <Line dataKey="price" stroke="#4f46e5" strokeWidth={2} dot={{ r: 2 }} isAnimationActive={false} />
-            </LineChart>
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              <Bar
+                yAxisId="units"
+                dataKey="p2p"
+                name="Between neighbours"
+                stackId="a"
+                fill="#4f46e5"
+              />
+              <Bar
+                yAxisId="units"
+                dataKey="ebIn"
+                name="Bought from EB"
+                stackId="a"
+                fill="#e11d48"
+              />
+              <Bar yAxisId="units" dataKey="ebOut" name="Sold to EB" fill="#d97706" />
+              <Line
+                yAxisId="price"
+                dataKey="price"
+                name="P2P price"
+                stroke="#059669"
+                strokeWidth={2}
+                connectNulls={false}
+                isAnimationActive={false}
+              />
+            </ComposedChart>
           </ResponsiveContainer>
         </div>
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {overview.map((r) => (
+            <button
+              key={r.slot}
+              type="button"
+              onClick={() => {
+                setSlot(r.slot);
+              }}
+              className={cn(
+                'rounded-lg px-2.5 py-1 text-xs font-semibold transition-colors',
+                r.slot === slot
+                  ? 'bg-stone-900 text-white'
+                  : 'bg-stone-100 text-stone-600 hover:bg-stone-200',
+                !r.eb_available && r.slot !== slot && 'ring-2 ring-grid-200',
+              )}
+            >
+              {hourLabel(r.hour_of_day)}
+              {r.delivered ? ' ✓' : ''}
+            </button>
+          ))}
+        </div>
       </Card>
+
+      {row !== undefined && (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <StatTile
+            label={`Neighbour trades · ${hourLabel(row.hour_of_day)}`}
+            value={kwh(row.p2p_kwh)}
+            caption={
+              row.p2p_avg_price !== null
+                ? `at ${inr(row.p2p_avg_price)} average`
+                : 'no match this hour'
+            }
+            icon={Scale}
+            tone="peer"
+          />
+          <StatTile
+            label="Bought from the EB"
+            value={kwh(row.eb_bought_kwh)}
+            caption={`at ${inr(row.retail_tariff)}/unit`}
+            icon={Zap}
+            tone="grid"
+          />
+          <StatTile
+            label="Sold to the EB"
+            value={kwh(row.eb_sold_kwh)}
+            caption={`at ${inr(row.feed_in_tariff)}/unit`}
+            icon={Landmark}
+            tone="solar"
+          />
+          <StatTile
+            label="Feeder forecast"
+            value={`${kwh(row.forecast_need_kwh)} short`}
+            caption={`${kwh(row.forecast_spare_kwh)} spare · ${row.eb_available ? 'EB up' : 'EB power cut'}`}
+            icon={row.eb_available ? TrendingUp : PlugZap}
+            tone={row.eb_available ? 'neutral' : 'grid'}
+          />
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-5">
+        <Card
+          className="xl:col-span-3"
+          title={`Watch them negotiate · ${row !== undefined ? hourLabel(row.hour_of_day) : ''}`}
+          subtitle="Each round, sellers come down and buyers come up toward their limits; whatever crosses trades"
+        >
+          {market === null || market.rounds.length === 0 ? (
+            <p className="py-8 text-center text-sm text-stone-400">
+              No neighbour negotiation this hour — nobody needed to buy, or nobody had any to spare.
+            </p>
+          ) : (
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-wrap gap-1.5">
+                {market.rounds.map((r) => (
+                  <button
+                    key={r.round_index}
+                    type="button"
+                    onClick={() => {
+                      setRound(r.round_index);
+                    }}
+                    className={cn(
+                      'rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors',
+                      r.round_index === round
+                        ? 'bg-peer-600 text-white'
+                        : 'bg-stone-100 text-stone-600 hover:bg-stone-200',
+                    )}
+                  >
+                    Round {r.round_index + 1}
+                    {r.trades.length > 0 ? ` · ${String(r.trades.length)} matched` : ''}
+                  </button>
+                ))}
+              </div>
+              <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+                <OfferColumn
+                  title="Asks · sellers"
+                  offers={current?.asks ?? []}
+                  tone="ask"
+                  matchedIds={matchedIds}
+                />
+                <OfferColumn
+                  title="Bids · buyers"
+                  offers={current?.bids ?? []}
+                  tone="bid"
+                  matchedIds={matchedIds}
+                />
+              </div>
+              {current !== undefined && current.trades.length > 0 && (
+                <div className="rounded-lg bg-stone-900 px-4 py-3">
+                  <p className="text-xs font-semibold text-stone-300">Matched this round</p>
+                  <ul className="mt-1.5 flex flex-col gap-1">
+                    {current.trades.map((t, i) => (
+                      <li key={i} className="flex items-center justify-between text-sm text-white">
+                        <span>
+                          {householdLabel(t.seller_household_id)} →{' '}
+                          {householdLabel(t.buyer_household_id)}
+                        </span>
+                        <span className="font-mono tnum">
+                          {kwh(t.kwh)} @ {inr(t.price_per_kwh)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+          {market !== null && market.eb_flows.length > 0 && (
+            <div className="mt-4 rounded-lg border border-stone-200 p-3">
+              <p className="flex items-center gap-1.5 text-xs font-semibold text-stone-600">
+                <Landmark className="size-3.5" aria-hidden="true" /> The EB covered the rest
+              </p>
+              <ul className="mt-1.5 flex flex-col gap-0.5">
+                {market.eb_flows.map((f, i) => (
+                  <li key={i} className="flex justify-between text-xs text-stone-600">
+                    <span>
+                      {householdLabel(f.household_id)}{' '}
+                      {f.side === 'bid' ? 'bought from' : 'sold to'} the EB
+                    </span>
+                    <span className="font-mono tnum">
+                      {kwh(f.kwh)} @ {inr(f.price)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </Card>
+
+        <Card
+          className="xl:col-span-2"
+          title="What the agents said"
+          subtitle="Each household's agent, before and after this hour's market"
+          contentClassName="p-0"
+        >
+          <ul className="max-h-[560px] divide-y divide-stone-100 overflow-y-auto">
+            {(market?.agents ?? []).map((a) => {
+              const meta = strategyMeta(a.strategy);
+              return (
+                <li key={a.household_id} className="px-5 py-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-1.5 text-sm font-semibold text-stone-900">
+                      <Bot className="size-4 text-peer-500" aria-hidden="true" />
+                      {a.display_name}
+                    </span>
+                    <Badge tone={meta.tone}>{meta.label}</Badge>
+                  </div>
+                  <p className="mt-1 text-xs leading-relaxed text-stone-600">{a.message}</p>
+                  {a.outcome !== '' && (
+                    <p className="mt-1 text-xs font-medium text-stone-800">→ {a.outcome}</p>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </Card>
+      </div>
     </div>
   );
 }

@@ -7,6 +7,7 @@ import { Dashboard } from '@/pages/Dashboard';
 import { Login } from '@/pages/Login';
 import { Market } from '@/pages/Market';
 import { Network } from '@/pages/Network';
+import { PlanSession } from '@/pages/PlanSession';
 import { Settings } from '@/pages/Settings';
 import { Trades } from '@/pages/Trades';
 
@@ -19,6 +20,7 @@ export default function App() {
           <Route element={<ProtectedRoute />}>
             <Route element={<AppShell />}>
               <Route index element={<Dashboard />} />
+              <Route path="session" element={<PlanSession />} />
               <Route path="market" element={<Market />} />
               <Route path="network" element={<Network />} />
               <Route path="trades" element={<Trades />} />

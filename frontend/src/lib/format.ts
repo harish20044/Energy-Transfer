@@ -77,3 +77,29 @@ export function simClock(hourOfDay: number): string {
   const minutes = totalMinutes % 60;
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
 }
+
+/** 14 -> "2 pm", 0 -> "12 am"; wraps past midnight (26 -> "2 am"). */
+export function hourLabel(hour: number): string {
+  const h = ((Math.floor(hour) % 24) + 24) % 24;
+  return `${String(h % 12 === 0 ? 12 : h % 12)} ${h < 12 ? 'am' : 'pm'}`;
+}
+
+/** "2026-05-15" -> "15 May 2026". */
+export function dateLabel(isoDate: string): string {
+  const [year, month, day] = isoDate.split('-').map(Number);
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+  return `${String(day)} ${months[(month ?? 1) - 1] ?? ''} ${String(year)}`;
+}

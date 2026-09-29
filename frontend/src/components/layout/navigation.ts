@@ -1,6 +1,7 @@
 import {
   Activity,
   ArrowLeftRight,
+  CalendarPlus,
   LayoutDashboard,
   Settings,
   Waypoints,
@@ -25,7 +26,8 @@ export const NAV_GROUPS: NavGroup[] = [
     label: 'Microgrid',
     items: [
       { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
-      { to: '/market', label: 'Live market', icon: Activity },
+      { to: '/session', label: 'Plan session', icon: CalendarPlus },
+      { to: '/market', label: 'Market', icon: Activity },
       { to: '/network', label: 'Grid network', icon: Waypoints },
     ],
   },
@@ -46,11 +48,15 @@ interface PageMeta {
 export const PAGE_META: Record<string, PageMeta> = {
   '/': {
     title: 'Dashboard',
-    subtitle: 'Your household’s energy, right now',
+    subtitle: 'Your household’s forecast, trades and money this session',
+  },
+  '/session': {
+    title: 'Plan a session',
+    subtitle: 'Pick when, the weather and the what-ifs — then let the agents trade',
   },
   '/market': {
-    title: 'Live market',
-    subtitle: 'Double auction clearing every 15 minutes',
+    title: 'Market',
+    subtitle: 'One auction per hour — households and the EB',
   },
   '/network': {
     title: 'Grid network',

@@ -1,140 +1,201 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
+import { ApiError } from '@/api/client';
 import {
-  fetchOwnBalance,
   fetchOwnHousehold,
   fetchOwnReadings,
   fetchOwnTrades,
-  type HouseholdBalance,
   type HouseholdProfile,
   type MeterReading,
 } from '@/api/household';
 import {
-  fetchSimulationState,
-  pause as apiPause,
-  play as apiPlay,
-  reset as apiReset,
-  step as apiStep,
-  type MarketTrade,
-  type PlayOptions,
-  type SimulationState,
-} from '@/api/simulation';
+  fetchOverview,
+  fetchOwnSession,
+  fetchSession,
+  nextHour as apiNextHour,
+  planSession,
+  type OwnSession,
+  type Session,
+  type SessionConfig,
+  type SlotSummary,
+} from '@/api/session';
+import type { MarketTrade } from '@/api/simulation';
 import { useAuth } from '@/auth/useAuth';
 import { LiveDataContext, type LiveDataValue } from '@/live/context';
 
-/** How often every live resource is refetched. Polling rather than a
- *  WebSocket, on purpose (see docs/adr — a 1s poll gives the same live feel
- *  with far fewer failure modes, and the tick engine itself only advances a
- *  couple of times a second at most anyway). */
-const POLL_MS = 1000;
+/** Nothing advances on its own; this only picks up changes made from
+ *  another browser (there's one feeder and one session for everyone). */
+const BACKGROUND_REFRESH_MS = 5000;
+/** Pause between hours during "Run to end", so the play-out is watchable. */
+const RUN_STEP_DELAY_MS = 700;
+
+function describe(error: unknown): string {
+  if (error instanceof ApiError) return error.message;
+  if (error instanceof Error) return error.message;
+  return 'Something went wrong';
+}
 
 export function LiveDataProvider({ children }: { children: ReactNode }) {
   const { accessToken } = useAuth();
-  const [simulation, setSimulation] = useState<SimulationState | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
   const [household, setHousehold] = useState<HouseholdProfile | null>(null);
+  const [own, setOwn] = useState<OwnSession | null>(null);
+  const [overview, setOverview] = useState<SlotSummary[]>([]);
   const [readings, setReadings] = useState<MeterReading[]>([]);
   const [trades, setTrades] = useState<MarketTrade[]>([]);
-  const [balance, setBalance] = useState<HouseholdBalance | null>(null);
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [version, setVersion] = useState(0);
+  const [error, setError] = useState<string | null>(null);
   const [householdRefreshCount, setHouseholdRefreshCount] = useState(0);
+  const stopRequested = useRef(false);
 
   const refreshHousehold = useCallback(() => {
     setHouseholdRefreshCount((count) => count + 1);
   }, []);
 
-  // The household's own configuration rarely changes, so it's fetched once
-  // (and again whenever refreshHousehold() is called after an edit) rather
-  // than on every poll tick.
   useEffect(() => {
     if (accessToken === null) return;
     let cancelled = false;
-
     fetchOwnHousehold(accessToken)
       .then((profile) => {
         if (!cancelled) setHousehold(profile);
       })
       .catch(() => {
-        // Not every account is linked to a household (e.g. an operator) —
-        // there's simply nothing household-specific to show for it.
+        // An account without a household (e.g. an operator) has nothing
+        // household-specific to show.
       });
-
     return () => {
       cancelled = true;
     };
   }, [accessToken, householdRefreshCount]);
 
+  const refresh = useCallback(async () => {
+    if (accessToken === null) return;
+    const results = await Promise.allSettled([
+      fetchSession(accessToken),
+      fetchOwnSession(accessToken),
+      fetchOverview(accessToken),
+      fetchOwnReadings(accessToken, 200),
+      fetchOwnTrades(accessToken, 500),
+    ]);
+    if (results[0].status === 'fulfilled') setSession(results[0].value);
+    if (results[1].status === 'fulfilled') setOwn(results[1].value);
+    if (results[2].status === 'fulfilled') setOverview(results[2].value);
+    if (results[3].status === 'fulfilled') setReadings(results[3].value);
+    if (results[4].status === 'fulfilled') setTrades(results[4].value);
+    setLoading(false);
+    setVersion((v) => v + 1);
+  }, [accessToken]);
+
   useEffect(() => {
     if (accessToken === null) return;
-    let cancelled = false;
-
-    async function poll(): Promise<void> {
-      const results = await Promise.allSettled([
-        fetchSimulationState(accessToken as string),
-        fetchOwnReadings(accessToken as string),
-        fetchOwnTrades(accessToken as string),
-        fetchOwnBalance(accessToken as string),
-      ]);
-      if (cancelled) return;
-      if (results[0].status === 'fulfilled') setSimulation(results[0].value);
-      if (results[1].status === 'fulfilled') setReadings(results[1].value);
-      if (results[2].status === 'fulfilled') setTrades(results[2].value);
-      if (results[3].status === 'fulfilled') setBalance(results[3].value);
-      setLoading(false);
-    }
-
-    void poll();
-    const timer = setInterval(() => void poll(), POLL_MS);
+    void refresh();
+    const timer = setInterval(() => void refresh(), BACKGROUND_REFRESH_MS);
     return () => {
-      cancelled = true;
       clearInterval(timer);
     };
-  }, [accessToken]);
+  }, [accessToken, refresh]);
 
-  const play = useCallback(
-    async (options?: PlayOptions) => {
-      if (accessToken === null) return;
-      setSimulation(await apiPlay(accessToken, options));
+  const plan = useCallback(
+    async (config: SessionConfig) => {
+      if (accessToken === null) return false;
+      setBusy(true);
+      setError(null);
+      try {
+        setSession(await planSession(accessToken, config));
+        await refresh();
+        return true;
+      } catch (err) {
+        setError(describe(err));
+        return false;
+      } finally {
+        setBusy(false);
+      }
     },
-    [accessToken],
+    [accessToken, refresh],
   );
 
-  const pause = useCallback(async () => {
+  const nextHour = useCallback(async () => {
     if (accessToken === null) return;
-    setSimulation(await apiPause(accessToken));
-  }, [accessToken]);
+    setBusy(true);
+    setError(null);
+    try {
+      setSession(await apiNextHour(accessToken));
+      await refresh();
+    } catch (err) {
+      setError(describe(err));
+    } finally {
+      setBusy(false);
+    }
+  }, [accessToken, refresh]);
 
-  const step = useCallback(async () => {
+  const runToEnd = useCallback(async () => {
     if (accessToken === null) return;
-    setSimulation(await apiStep(accessToken));
-  }, [accessToken]);
+    stopRequested.current = false;
+    setRunning(true);
+    setError(null);
+    try {
+      for (;;) {
+        const state = await apiNextHour(accessToken);
+        setSession(state);
+        await refresh();
+        if (state.status === 'complete' || stopRequested.current) break;
+        await new Promise((resolve) => setTimeout(resolve, RUN_STEP_DELAY_MS));
+        if (stopRequested.current) break;
+      }
+    } catch (err) {
+      setError(describe(err));
+    } finally {
+      setRunning(false);
+    }
+  }, [accessToken, refresh]);
 
-  const reset = useCallback(
-    async (options?: PlayOptions) => {
-      if (accessToken === null) return;
-      setSimulation(await apiReset(accessToken, options));
-      setReadings([]);
-      setTrades([]);
-      setBalance(null);
-    },
-    [accessToken],
-  );
+  const stop = useCallback(() => {
+    stopRequested.current = true;
+  }, []);
 
   const value = useMemo<LiveDataValue>(
     () => ({
-      simulation,
+      session,
       household,
+      own,
+      overview,
       readings,
       trades,
-      balance,
       loading,
+      busy,
+      running,
+      version,
+      error,
       refreshHousehold,
-      play,
-      pause,
-      step,
-      reset,
+      refresh,
+      plan,
+      nextHour,
+      runToEnd,
+      stop,
     }),
-    [simulation, household, readings, trades, balance, loading, refreshHousehold, play, pause, step, reset],
+    [
+      session,
+      household,
+      own,
+      overview,
+      readings,
+      trades,
+      loading,
+      busy,
+      running,
+      version,
+      error,
+      refreshHousehold,
+      refresh,
+      plan,
+      nextHour,
+      runToEnd,
+      stop,
+    ],
   );
 
   return <LiveDataContext.Provider value={value}>{children}</LiveDataContext.Provider>;

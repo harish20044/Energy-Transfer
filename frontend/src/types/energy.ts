@@ -22,6 +22,8 @@ export interface LivePower {
 /** One settled trade, carrying the rationale that satisfies objective O7. */
 export interface Trade {
   id: string;
+  /** Session slot (hour) the trade delivers in. */
+  slot: number;
   at: string;
   counterparty: string;
   side: TradeSide;

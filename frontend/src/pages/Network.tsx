@@ -7,8 +7,9 @@ import { useAuth } from '@/auth/useAuth';
 import { Badge } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
 import { StatTile } from '@/components/ui/StatTile';
-import { kwh } from '@/lib/format';
+import { hourLabel, kwh } from '@/lib/format';
 import { householdLabel } from '@/lib/household';
+import { useLiveData } from '@/live/useLiveData';
 
 const LANE_Y = [90, 220, 350];
 const SUBSTATION_X = 50;
@@ -47,11 +48,14 @@ export function Network() {
   const { accessToken } = useAuth();
   const [feeder, setFeeder] = useState<Feeder | null>(null);
   const [curtailments, setCurtailments] = useState<Curtailment[]>([]);
+  const { session, version } = useLiveData();
 
   useEffect(() => {
     if (accessToken === null) return;
     const controller = new AbortController();
-    fetchNetwork(accessToken, controller.signal).then(setFeeder).catch(() => undefined);
+    fetchNetwork(accessToken, controller.signal)
+      .then(setFeeder)
+      .catch(() => undefined);
     return () => {
       controller.abort();
     };
@@ -59,14 +63,14 @@ export function Network() {
 
   useEffect(() => {
     if (accessToken === null) return;
-    const timer = setInterval(() => {
-      fetchRecentCurtailments(accessToken, 30).then(setCurtailments).catch(() => undefined);
-    }, 2000);
-    fetchRecentCurtailments(accessToken, 30).then(setCurtailments).catch(() => undefined);
+    const controller = new AbortController();
+    fetchRecentCurtailments(accessToken, 200, controller.signal)
+      .then(setCurtailments)
+      .catch(() => undefined);
     return () => {
-      clearInterval(timer);
+      controller.abort();
     };
-  }, [accessToken]);
+  }, [accessToken, version]);
 
   if (feeder === null) {
     return (
@@ -106,12 +110,12 @@ export function Network() {
         <StatTile
           label="Thermal limit per line"
           value={`${String(feeder.lines[0]?.thermal_limit_kw ?? 0)} kW`}
-          caption="calibrated so a heatwave scenario breaches it"
+          caption="checked for every hour's trades before they settle"
           icon={Zap}
           tone="peer"
         />
         <StatTile
-          label="Recently curtailed"
+          label="Curtailed this session"
           value={kwh(totalCurtailedKwh)}
           caption={`${String(curtailments.length)} trade${curtailments.length === 1 ? '' : 's'} cut back`}
           icon={TriangleAlert}
@@ -160,7 +164,12 @@ export function Network() {
 
               <g>
                 <circle cx={SUBSTATION_X} cy={SUBSTATION_Y} r={20} fill="#1c1917" />
-                <text x={SUBSTATION_X} y={SUBSTATION_Y + 4} textAnchor="middle" className="fill-white text-[10px] font-bold">
+                <text
+                  x={SUBSTATION_X}
+                  y={SUBSTATION_Y + 4}
+                  textAnchor="middle"
+                  className="fill-white text-[10px] font-bold"
+                >
                   SUB
                 </text>
               </g>
@@ -176,10 +185,20 @@ export function Network() {
                     stroke={node.flagged ? '#d97706' : '#4f46e5'}
                     strokeWidth={2}
                   />
-                  <text x={node.x} y={node.y + 4} textAnchor="middle" className="fill-stone-700 text-[10px] font-bold">
+                  <text
+                    x={node.x}
+                    y={node.y + 4}
+                    textAnchor="middle"
+                    className="fill-stone-700 text-[10px] font-bold"
+                  >
                     {node.id}
                   </text>
-                  <text x={node.x} y={node.y + 15 + 14} textAnchor="middle" className="fill-stone-500 text-[10px] font-medium">
+                  <text
+                    x={node.x}
+                    y={node.y + 15 + 14}
+                    textAnchor="middle"
+                    className="fill-stone-500 text-[10px] font-medium"
+                  >
                     {node.label}
                   </text>
                 </g>
@@ -188,7 +207,11 @@ export function Network() {
           </div>
         </Card>
 
-        <Card title="Constraint watch" subtitle="What the safety layer has had to cut back" contentClassName="p-0">
+        <Card
+          title="Constraint watch"
+          subtitle="What the safety layer has had to cut back"
+          contentClassName="p-0"
+        >
           <ul className="divide-y divide-stone-100">
             {curtailments.slice(0, 12).map((c, i) => (
               <li key={i} className="flex items-start gap-3 px-5 py-3.5">
@@ -200,8 +223,10 @@ export function Network() {
                     {householdLabel(c.seller_household_id)} → {householdLabel(c.buyer_household_id)}
                   </p>
                   <p className="text-xs text-stone-500">
-                    <span className="font-mono font-semibold text-amber-700 tnum">{kwh(c.curtailed_kwh)}</span>{' '}
-                    cut back — {c.reason}, tick {c.tick_index}
+                    <span className="font-mono font-semibold text-amber-700 tnum">
+                      {kwh(c.curtailed_kwh)}
+                    </span>{' '}
+                    cut back — {c.reason}, {hourLabel((session?.start_hour ?? 0) + c.tick_index)}
                   </p>
                 </div>
               </li>

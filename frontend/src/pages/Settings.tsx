@@ -1,12 +1,13 @@
-import { BatteryCharging, Bot, Scale } from 'lucide-react';
-import { useState } from 'react';
+import { BatteryCharging, Bot, Brain, Scale } from 'lucide-react';
+import { useEffect, useState } from 'react';
+
+import { fetchOwnAgent, type AgentMemory } from '@/api/agents';
 
 import { updateEveningReserve } from '@/api/household';
 import { useAuth } from '@/auth/useAuth';
 import { Badge } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
-import { inr, kw, kwh } from '@/lib/format';
-import { FEED_IN_TARIFF, RETAIL_TARIFF } from '@/lib/tariffs';
+import { hourLabel, inr, kw, kwh, percent } from '@/lib/format';
 import { useLiveData } from '@/live/useLiveData';
 
 interface PreferenceRowProps {
@@ -29,7 +30,21 @@ function PreferenceRow({ label, description, value }: PreferenceRowProps) {
 
 export function Settings() {
   const { accessToken } = useAuth();
-  const { household, refreshHousehold } = useLiveData();
+  const { household, session, refreshHousehold, version } = useLiveData();
+  const [agent, setAgent] = useState<AgentMemory | null>(null);
+
+  useEffect(() => {
+    if (accessToken === null) return;
+    const controller = new AbortController();
+    fetchOwnAgent(accessToken, controller.signal)
+      .then(setAgent)
+      .catch(() => undefined);
+    return () => {
+      controller.abort();
+    };
+  }, [accessToken, version]);
+  const feedIn = session?.feed_in_tariff ?? 3.61;
+  const retail = session?.retail_tariff ?? 10.5;
   const [saving, setSaving] = useState(false);
   const [draftReserve, setDraftReserve] = useState<number | null>(null);
 
@@ -70,10 +85,11 @@ export function Settings() {
       >
         <div className="flex items-center justify-between gap-6 border-b border-stone-100 py-3.5">
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold text-stone-900">Evening reserve</p>
+            <p className="text-sm font-semibold text-stone-900">Battery reserve</p>
             <p className="mt-0.5 text-xs text-stone-500">
-              Charge held back once the sun goes down, never sold before then — read by your
-              agent on every tick.
+              The charge level your agent never sells below. It still uses the battery for your own
+              home; this only protects stored charge from being sold. Applies from the next session
+              you plan.
             </p>
             <input
               type="range"
@@ -119,24 +135,87 @@ export function Settings() {
       >
         <PreferenceRow
           label="Minimum sale price"
-          description="Your agent never sells below this, so a trade always beats exporting"
-          value={`${inr(FEED_IN_TARIFF)}/unit`}
+          description="The EB's feed-in rate (TNERC) — your agent never sells below it, so a trade always beats exporting"
+          value={`${inr(feedIn)}/unit`}
         />
         <PreferenceRow
           label="Maximum purchase price"
-          description="Your agent never pays more than the utility would charge"
-          value={`${inr(RETAIL_TARIFF)}/unit`}
+          description="The EB's retail rate for your slab — your agent never pays neighbours more than this"
+          value={`${inr(retail)}/unit`}
         />
         <PreferenceRow
           label="Household size"
-          description="Scales how much this household typically consumes"
+          description="Your family — who is home when is what drives consumption"
           value={`${String(household.member_count)} member${household.member_count === 1 ? '' : 's'}`}
         />
         <PreferenceRow
           label="Rooftop solar capacity"
           description="Installed generation capacity used to simulate this household's output"
-          value={household.solar_capacity_kwp > 0 ? `${household.solar_capacity_kwp.toFixed(1)} kWp` : 'None'}
+          value={
+            household.solar_capacity_kwp > 0
+              ? `${household.solar_capacity_kwp.toFixed(1)} kWp`
+              : 'None'
+          }
         />
+      </Card>
+
+      <Card
+        className="xl:col-span-2"
+        title="What your agent has learned"
+        subtitle="Its own price forecast, learned from every hour it has traded or watched — kept across sessions"
+        action={
+          <Badge tone="peer">
+            <Brain className="size-3.5" aria-hidden="true" />
+            {agent !== null ? agent.graph_nodes.join(' → ') : 'LangGraph agent'}
+          </Badge>
+        }
+      >
+        {agent === null ? (
+          <p className="text-sm text-stone-400">Loading what your agent knows…</p>
+        ) : (
+          <div className="flex flex-col gap-4">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div>
+                <p className="text-xs text-stone-500">Opens sales above its floor by</p>
+                <p className="font-mono text-sm font-bold text-stone-900 tnum">
+                  {percent(agent.sell_margin * 100)}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-stone-500">Opens bids below its ceiling by</p>
+                <p className="font-mono text-sm font-bold text-stone-900 tnum">
+                  {percent(agent.buy_margin * 100)}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-stone-500">Neighbour trades so far</p>
+                <p className="font-mono text-sm font-bold text-stone-900 tnum">
+                  {agent.trades} · {kwh(agent.units_sold + agent.units_bought)}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-stone-500">Saved vs the EB, all sessions</p>
+                <p className="font-mono text-sm font-bold text-battery-600 tnum">
+                  {inr(agent.savings_inr)}
+                </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-6 gap-1.5 sm:grid-cols-12">
+              {agent.price_by_hour.map((price, hour) => (
+                <div
+                  key={hour}
+                  className={`rounded-md px-1 py-1.5 text-center ${price === null ? 'bg-stone-50' : 'bg-peer-50'}`}
+                  title={price === null ? 'Not seen yet' : `Learned price at ${hourLabel(hour)}`}
+                >
+                  <p className="text-[10px] text-stone-500">{hourLabel(hour)}</p>
+                  <p className="font-mono text-[11px] font-semibold text-stone-800 tnum">
+                    {price === null ? '—' : `₹${price.toFixed(1)}`}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </Card>
 
       <Card
@@ -153,13 +232,13 @@ export function Settings() {
       >
         <PreferenceRow
           label="Clearing mechanism"
-          description="Multi-round negotiation: each side concedes toward its reservation price until it crosses"
-          value="Negotiated uniform price"
+          description="One auction per hour of the session, cleared in time order before delivery; each side concedes over rounds, and the EB takes whatever is left"
+          value="Hourly ahead market"
         />
         <PreferenceRow
-          label="Tick length"
-          description="How much simulated time one tick represents"
-          value="15 minutes"
+          label="Delivery"
+          description="Each hour is delivered in 15-minute intervals; the battery absorbs forecast errors first, then the EB"
+          value="15-minute metering"
         />
         <PreferenceRow
           label="Grid safety"

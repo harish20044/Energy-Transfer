@@ -1,23 +1,35 @@
 import { createContext } from 'react';
 
-import type { HouseholdBalance, HouseholdProfile, MeterReading } from '@/api/household';
-import type { MarketTrade, PlayOptions, SimulationState } from '@/api/simulation';
+import type { HouseholdProfile, MeterReading } from '@/api/household';
+import type { OwnSession, Session, SessionConfig, SlotSummary } from '@/api/session';
+import type { MarketTrade } from '@/api/simulation';
 
 export interface LiveDataValue {
-  simulation: SimulationState | null;
+  session: Session | null;
   household: HouseholdProfile | null;
-  /** Most recent tick first. */
+  /** This household's forecast, agent decisions, deliveries and money. */
+  own: OwnSession | null;
+  /** The whole feeder, hour by hour. */
+  overview: SlotSummary[];
+  /** Delivered 15-minute intervals, most recent first. */
   readings: MeterReading[];
-  /** This household's own trades, most recent first. */
+  /** This household's own neighbour trades, in slot order. */
   trades: MarketTrade[];
-  balance: HouseholdBalance | null;
-  /** True only until the first successful load of every resource. */
+  /** True only until the first load completes. */
   loading: boolean;
+  /** A plan / next-hour / reset request is in flight. */
+  busy: boolean;
+  /** "Run to end" is stepping through the remaining hours. */
+  running: boolean;
+  /** Bumped after every refresh, so pages can refetch what depends on it. */
+  version: number;
+  error: string | null;
   refreshHousehold: () => void;
-  play: (options?: PlayOptions) => Promise<void>;
-  pause: () => Promise<void>;
-  step: () => Promise<void>;
-  reset: (options?: PlayOptions) => Promise<void>;
+  refresh: () => Promise<void>;
+  plan: (config: SessionConfig) => Promise<boolean>;
+  nextHour: () => Promise<void>;
+  runToEnd: () => Promise<void>;
+  stop: () => void;
 }
 
 export const LiveDataContext = createContext<LiveDataValue | null>(null);

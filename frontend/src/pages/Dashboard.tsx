@@ -1,84 +1,45 @@
-import { BatteryCharging, IndianRupee, Leaf, Sun } from 'lucide-react';
+import { CalendarPlus, CloudSun, Sunrise, Sunset, Thermometer } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import type { Family } from '@/api/family';
 import { fetchOwnFamily } from '@/api/family';
-import type { Forecast } from '@/api/forecast';
-import { fetchOwnForecast } from '@/api/forecast';
 import { useAuth } from '@/auth/useAuth';
+import { AgentChat } from '@/components/dashboard/AgentChat';
+import { AgentPlan } from '@/components/dashboard/AgentPlan';
 import { EnergyFlow } from '@/components/dashboard/EnergyFlow';
 import { FamilyPanel } from '@/components/dashboard/FamilyPanel';
-import { ForecastPanel } from '@/components/dashboard/ForecastPanel';
-import { PowerHistoryChart } from '@/components/dashboard/PowerHistoryChart';
-import { TradeList } from '@/components/dashboard/TradeList';
+import { ForecastChart } from '@/components/dashboard/ForecastChart';
+import { MoneyCards } from '@/components/dashboard/MoneyCards';
 import { Badge } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
-import { StatTile } from '@/components/ui/StatTile';
-import { ownMarketKw, tradingPartnerCount } from '@/lib/energy';
-import { inrWhole, kwh, percent } from '@/lib/format';
-import { toUiTrade } from '@/lib/tradeView';
+import { dateLabel, hourLabel, simClock } from '@/lib/format';
+import { scenarioLabel } from '@/lib/session';
 import { useLiveData } from '@/live/useLiveData';
 
 export function Dashboard() {
   const { accessToken } = useAuth();
-  const { household, readings, trades, balance, simulation, loading } = useLiveData();
+  const { session, household, own, readings, trades, loading, version } = useLiveData();
   const [family, setFamily] = useState<Family | null>(null);
-  const [forecast, setForecast] = useState<Forecast | null>(null);
 
-  // Fetched once on mount and then every 30s (occupancy only changes on the
-  // scale of hours, not seconds, so it doesn't need the 1s poll everything
-  // else on this page uses) rather than tied to the tick index, which would
-  // otherwise race the very first render against the simulation's own poll.
+  // Occupancy follows the session clock, so refetch whenever the session
+  // changes (plan, next hour, reset) — not on a timer.
   useEffect(() => {
     if (accessToken === null) return;
     let cancelled = false;
-
-    function load(): void {
-      fetchOwnFamily(accessToken as string)
-        .then((data) => {
-          if (!cancelled) setFamily(data);
-        })
-        .catch(() => {
-          // Not every account is linked to a household with a generated
-          // family (e.g. an operator) — the panel just stays hidden.
-        });
-    }
-
-    load();
-    const timer = setInterval(load, 30_000);
+    fetchOwnFamily(accessToken)
+      .then((data) => {
+        if (!cancelled) setFamily(data);
+      })
+      .catch(() => {
+        // An account with no household has no family to show.
+      });
     return () => {
       cancelled = true;
-      clearInterval(timer);
     };
-  }, [accessToken]);
+  }, [accessToken, version]);
 
-  // Same cadence as the family panel above — the forecast is expressed in
-  // whole hours, so it has no reason to refetch on every 1s tick poll.
-  useEffect(() => {
-    if (accessToken === null) return;
-    let cancelled = false;
-
-    function load(): void {
-      fetchOwnForecast(accessToken as string)
-        .then((data) => {
-          if (!cancelled) setForecast(data);
-        })
-        .catch(() => {
-          // Same reasoning as the family fetch above: not every account has
-          // a forecastable household, so the panel just stays hidden.
-        });
-    }
-
-    load();
-    const timer = setInterval(load, 30_000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [accessToken]);
-
-  if (loading || household === null) {
+  if (loading || household === null || session === null) {
     return (
       <div className="flex h-64 items-center justify-center text-sm text-stone-400">
         Loading your household…
@@ -86,142 +47,153 @@ export function Dashboard() {
     );
   }
 
+  if (session.status === 'setup' || own === null) {
+    return (
+      <div className="mx-auto flex max-w-2xl flex-col items-center gap-4 rounded-xl border border-stone-200 bg-white p-10 text-center">
+        <CalendarPlus className="size-10 text-peer-500" aria-hidden="true" />
+        <h2 className="text-lg font-bold text-stone-900">No session planned yet</h2>
+        <p className="text-sm text-stone-500">
+          Pick a date and start time, set the weather and any what-ifs, and every household&apos;s
+          agent will forecast the hours ahead and trade them with its neighbours and the EB.
+        </p>
+        <Link
+          to="/session"
+          className="rounded-lg bg-peer-600 px-4 py-2 text-sm font-semibold text-white hover:bg-peer-700"
+        >
+          Plan a session
+        </Link>
+      </div>
+    );
+  }
+
+  const statement = own.delivered ?? own.planned;
+  const setup = session.households.find((h) => h.household_id === household.id);
+  const capacity = setup?.battery_capacity_kwh ?? household.battery_capacity_kwh;
+  const ticksPerHour = 60 / session.tick_minutes;
+  const durationH = session.tick_minutes / 60;
+
   const latest = readings[0];
-  const tickMinutes = simulation?.tick_minutes ?? 15;
-  const durationH = tickMinutes / 60;
-
-  const peerKw =
-    latest !== undefined ? ownMarketKw(trades, household.id, latest.tick_index, tickMinutes) : 0;
-  const peerCount =
-    latest !== undefined ? tradingPartnerCount(trades, household.id, latest.tick_index) : 0;
-  const gridKw = latest !== undefined ? latest.grid_kwh / durationH : 0;
-
-  // Battery kW is derived from the change in state of charge between the two
-  // most recent readings — there is no separate "battery power" reading, the
-  // charge itself IS the evidence of how much power moved.
   const previous = readings[1];
+  const currentSlot = latest !== undefined ? Math.floor(latest.tick_index / ticksPerHour) : 0;
+  const slotNow = own.slots[currentSlot];
+  const peerKw = slotNow !== undefined ? slotNow.p2p_sold_kwh - slotNow.p2p_bought_kwh : 0;
+  const partners = new Set(
+    trades
+      .filter((t) => t.tick_index === currentSlot)
+      .map((t) =>
+        t.seller_household_id === household.id ? t.buyer_household_id : t.seller_household_id,
+      ),
+  );
+  const startSoc = setup?.start_soc ?? 0;
   const batteryKw =
-    latest !== undefined && previous !== undefined
-      ? ((latest.battery_soc - previous.battery_soc) * household.battery_capacity_kwh) / durationH
+    latest !== undefined
+      ? ((latest.battery_soc - (previous?.battery_soc ?? startSoc)) * capacity) / durationH
       : 0;
-
   const livePower = {
     solarKw: latest?.generation_kw ?? 0,
     loadKw: latest?.consumption_kw ?? 0,
     batteryKw,
-    peerKw,
-    gridKw,
-    batterySoc: (latest?.battery_soc ?? 0) * 100,
+    peerKw: latest !== undefined ? peerKw : 0,
+    gridKw: latest !== undefined ? latest.grid_kwh / durationH : 0,
+    batterySoc: (latest?.battery_soc ?? startSoc) * 100,
   };
-
-  // Self-sufficiency over the fetched window: how much of this household's
-  // consumption was met without importing from the grid.
-  const totalConsumedKwh = readings.reduce((sum, r) => sum + r.consumption_kw * durationH, 0);
-  const totalImportedKwh = readings.reduce((sum, r) => sum + Math.max(0, r.grid_kwh), 0);
-  const selfSufficiency =
-    totalConsumedKwh > 0 ? Math.min(100, (1 - totalImportedKwh / totalConsumedKwh) * 100) : 100;
-  const gridAvoidedKwh = Math.max(0, totalConsumedKwh - totalImportedKwh);
-
-  const uiTrades = trades.slice(0, 5).map((t) => toUiTrade(t, household.id, tickMinutes));
+  const weather = session.weather;
 
   return (
     <div className="mx-auto flex max-w-[1400px] flex-col gap-5">
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatTile
-          label="Net balance"
-          value={inrWhole(balance?.net_balance ?? 0)}
-          caption="since the last reset"
-          icon={IndianRupee}
-          tone="battery"
-        />
-        <StatTile
-          label="Sold to neighbours"
-          value={kwh(balance?.total_sold_kwh ?? 0)}
-          caption={peerKw > 0 ? `${kwh(peerKw)} right now` : 'nothing this tick'}
-          icon={Sun}
-          tone="solar"
-        />
-        <StatTile
-          label="Bought from neighbours"
-          value={kwh(balance?.total_bought_kwh ?? 0)}
-          caption={peerKw < 0 ? `${kwh(-peerKw)} right now` : 'nothing this tick'}
-          icon={BatteryCharging}
-          tone="peer"
-        />
-        <StatTile
-          label="Self-sufficiency"
-          value={percent(selfSufficiency)}
-          caption={`${kwh(gridAvoidedKwh)} not drawn from the grid`}
-          icon={Leaf}
-          tone="battery"
-        />
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm">
+        <span className="font-semibold text-stone-900">
+          {dateLabel(session.sim_date)} · {hourLabel(session.start_hour)} for{' '}
+          {session.horizon_hours} h
+        </span>
+        <Badge tone="peer">
+          <CloudSun className="size-3.5" aria-hidden="true" />
+          {scenarioLabel(session.scenario)} · {weather.sky}
+        </Badge>
+        <Badge>
+          <Thermometer className="size-3.5" aria-hidden="true" />
+          {weather.temperature_now_c.toFixed(1)} °C now · {weather.t_min_c.toFixed(0)}–
+          {weather.t_max_c.toFixed(0)} °C
+        </Badge>
+        <Badge>
+          <Sunrise className="size-3.5" aria-hidden="true" />
+          {simClock(weather.sunrise_h)}
+          <Sunset className="ml-1 size-3.5" aria-hidden="true" />
+          {simClock(weather.sunset_h)}
+        </Badge>
+        {session.power_cut !== null && (
+          <Badge tone="grid">
+            EB cut {hourLabel(session.power_cut.start_hour)}–{hourLabel(session.power_cut.end_hour)}
+          </Badge>
+        )}
+        <span className="ml-auto text-xs text-stone-500">
+          EB ₹{session.retail_tariff.toFixed(2)} in · ₹{session.feed_in_tariff.toFixed(2)} out
+          {session.peak_surcharge_pct > 0 && ` · +${String(session.peak_surcharge_pct)}% 6–10 pm`}
+        </span>
       </div>
+
+      {statement !== null && <MoneyCards statement={statement} />}
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
         <Card
           className="xl:col-span-2"
           title="Energy flow"
-          subtitle={`Live · tick ${String(latest?.tick_index ?? 0)}`}
+          subtitle={
+            latest !== undefined
+              ? `${hourLabel(session.start_hour + latest.tick_index * durationH)} · delivered`
+              : 'Nothing delivered yet — press Next hour or Run to end'
+          }
           action={
             <Badge tone="peer">
-              {peerCount === 0
-                ? 'No neighbours this tick'
-                : `Trading with ${String(peerCount)} neighbour${peerCount === 1 ? '' : 's'}`}
+              {partners.size === 0
+                ? 'No neighbours this hour'
+                : `Trading with ${String(partners.size)} neighbour${partners.size === 1 ? '' : 's'}`}
             </Badge>
           }
           contentClassName="p-2"
         >
-          <EnergyFlow livePower={livePower} peerCount={peerCount} />
-        </Card>
-
-        <Card
-          title="Recent trades"
-          subtitle="Every trade carries a reason"
-          action={
-            <Link
-              to="/trades"
-              className="text-xs font-semibold text-peer-600 hover:text-peer-700 hover:underline"
-            >
-              View all
-            </Link>
-          }
-          contentClassName="p-0"
-        >
-          {uiTrades.length > 0 ? (
-            <TradeList trades={uiTrades} />
-          ) : (
-            <p className="p-5 text-sm text-stone-400">No trades settled yet — press Play.</p>
-          )}
-        </Card>
-      </div>
-
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
-        <Card
-          className="xl:col-span-2"
-          title="Recent power"
-          subtitle="Your own generation and consumption over recent ticks"
-        >
-          <PowerHistoryChart readings={readings} tickMinutes={tickMinutes} />
+          <EnergyFlow livePower={livePower} peerCount={partners.size} />
         </Card>
 
         <Card title="Who's home" subtitle="What's actually driving your consumption right now">
           {family !== null ? (
             <FamilyPanel family={family} />
           ) : (
-            <p className="text-sm text-stone-400">Loading your household's family…</p>
+            <p className="text-sm text-stone-400">Loading your household&apos;s family…</p>
           )}
         </Card>
       </div>
 
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
+        <Card
+          className="xl:col-span-2"
+          title="Forecast vs what happened"
+          subtitle={`Your next ${String(session.horizon_hours)} hours — P50 inside the P10–P90 band, actuals as they're delivered`}
+          action={
+            <Badge>
+              {own.model === 'lightgbm-quantile'
+                ? 'LightGBM quantile + conformal'
+                : 'Seasonal naive'}
+            </Badge>
+          }
+        >
+          <ForecastChart slots={own.slots} />
+        </Card>
+
+        <Card
+          title="Talk to your agent"
+          subtitle="It explains its real decisions — it never trades from chat"
+        >
+          <AgentChat />
+        </Card>
+      </div>
+
       <Card
-        title="Next 4 hours"
-        subtitle="Forecast consumption vs. generation, and whether to buy or sell"
+        title="Your agent's plan, hour by hour"
+        subtitle="What it decided before each hour's market, how the market went, and what actually happened"
+        contentClassName="p-0"
       >
-        {forecast !== null ? (
-          <ForecastPanel hours={forecast.hours} model={forecast.model} />
-        ) : (
-          <p className="text-sm text-stone-400">Loading your forecast…</p>
-        )}
+        <AgentPlan slots={own.slots} deliveredHours={session.hours_delivered} />
       </Card>
     </div>
   );

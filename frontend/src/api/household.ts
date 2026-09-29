@@ -16,6 +16,8 @@ export interface HouseholdProfile {
   evening_reserve: number;
 }
 
+/** One delivered 15-minute interval. `tick_index` counts intervals since
+ *  the session started. */
 export interface MeterReading {
   tick_index: number;
   consumption_kw: number;
@@ -24,13 +26,6 @@ export interface MeterReading {
   battery_action: 'charging' | 'discharging' | 'idle';
   grid_kwh: number;
   created_at: string;
-}
-
-export interface HouseholdBalance {
-  household_id: string;
-  net_balance: number;
-  total_sold_kwh: number;
-  total_bought_kwh: number;
 }
 
 export function fetchOwnHousehold(
@@ -62,17 +57,10 @@ export function fetchOwnReadings(
 
 export function fetchOwnTrades(
   accessToken: string,
-  limit = 50,
+  limit = 100,
   signal?: AbortSignal,
 ): Promise<MarketTrade[]> {
   return apiFetch<MarketTrade[]>(`/households/me/trades?limit=${String(limit)}`, accessToken, {
     signal,
   });
-}
-
-export function fetchOwnBalance(
-  accessToken: string,
-  signal?: AbortSignal,
-): Promise<HouseholdBalance> {
-  return apiFetch<HouseholdBalance>('/households/me/balance', accessToken, { signal });
 }
