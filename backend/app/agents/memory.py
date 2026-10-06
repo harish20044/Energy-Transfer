@@ -16,7 +16,16 @@ the margin toward a target price with a Widrow-Hoff update:
 
 It also keeps a running average of the price the market actually clears at
 for each hour of the day — its own learned price forecast — which it uses to
-decide when stored charge is worth selling.
+decide how much to commit and when stored charge is worth selling.
+
+That average is learned across sessions, so it can be stale: prices learned
+in a neighbourhood where every home floods the feeder at noon say nothing
+about one where three homes have no panels. Within a session the agent also
+watches the market tape: how far the last hour that traded cleared above or
+below its belief (`carry_surprise`). That surprise carries into the next
+hour's estimate and fades by `SURPRISE_PERSISTENCE` each hour — electricity
+prices are strongly persistent hour to hour, so the market's level right now
+is the best single correction to a belief formed elsewhere.
 
 Pure: no I/O, no clock, no randomness.
 """
@@ -31,6 +40,8 @@ _MAX_MARGIN = 0.8
 _PRICE_EMA_WEIGHT = 0.3
 DEFAULT_MARGIN = 0.35
 HOURS = 24
+# Fraction of an hour's price surprise still expected the next hour.
+SURPRISE_PERSISTENCE = 0.8
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +78,17 @@ class TickFeedback:
     floor_or_ceiling: float
     feed_in_tariff: float
     retail_tariff: float
+
+
+def carry_surprise(previous: float, *, believed: float, market_prices: tuple[float, ...]) -> float:
+    """The price surprise to carry into the next hour: how far the market
+    cleared above (+) or below (-) `believed` — the agent's own hour-of-day
+    price for the hour just cleared — faded by one hour. An hour with no
+    trades says nothing new, so the previous surprise just fades."""
+    if not market_prices:
+        return SURPRISE_PERSISTENCE * previous
+    observed = sum(market_prices) / len(market_prices)
+    return SURPRISE_PERSISTENCE * (observed - believed)
 
 
 def _toward(current: float, target: float) -> float:

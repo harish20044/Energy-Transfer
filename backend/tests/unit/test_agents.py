@@ -4,12 +4,13 @@ learns from the market."""
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 
 import pytest
 
 from app.agents.household_agent import GRAPH_NODES, compiled_graph, decide_slot
-from app.agents.memory import AgentMemory, TickFeedback, learn
+from app.agents.memory import SURPRISE_PERSISTENCE, AgentMemory, TickFeedback, carry_surprise, learn
 from app.agents.types import SessionContext, SlotObservation, Strategy
 from app.domain.battery.model import Battery
 from app.domain.market.orderbook import Side
@@ -59,10 +60,38 @@ def _context(
     )
 
 
-def _decide(ctx: SessionContext, slot: int = 0) -> object:
+def _decide(ctx: SessionContext, slot: int = 0, *, price_surprise: float = 0.0) -> object:
     return decide_slot(
-        SlotObservation(context=ctx, slot=slot, committed_kwh=(0.0,) * len(ctx.forecast))
+        SlotObservation(
+            context=ctx,
+            slot=slot,
+            committed_kwh=(0.0,) * len(ctx.forecast),
+            price_surprise=price_surprise,
+        )
     )
+
+
+def _no_panels(load: float, spread: float) -> SessionContext:
+    """A house with no panels and an empty battery: everything it uses, it buys."""
+    ctx = _context([(load, 0.0)], soc=0.05)
+    hour = HourForecast(
+        slot=0,
+        day=date(2026, 5, 15),
+        hour_of_day=14,
+        consumption_p10=load - spread,
+        consumption_p50=load,
+        consumption_p90=load + spread,
+        generation_p10=0.0,
+        generation_p50=0.0,
+        generation_p90=0.0,
+    )
+    return replace(ctx, forecast=(hour,))
+
+
+def _believes(price: float, hour: int = 14) -> AgentMemory:
+    prices: list[float | None] = [None] * 24
+    prices[hour] = price
+    return AgentMemory(price_by_hour=tuple(prices))
 
 
 def test_the_decision_graph_has_the_documented_nodes() -> None:
@@ -97,6 +126,47 @@ def test_an_empty_battery_at_night_buys_its_shortfall_firmly() -> None:
     assert decision.strategy is Strategy.BUY_SHORTFALL
     assert decision.orders[0].side is Side.BID and decision.orders[0].firm
     assert decision.orders[0].kwh >= decision.short_kwh
+
+
+def test_a_stale_price_belief_never_buys_past_the_forecasts_p90() -> None:
+    """Regression: an agent that learned (in another neighbourhood) that noon
+    energy goes for the feed-in rate sees no cost in over-buying, so the
+    newsvendor pushes it to its very top quantile. It must stop at the P90
+    the forecast is calibrated for — not extrapolate a Gaussian tail to two
+    or three times the house's need — and the EB backs only the expected
+    shortfall, never the hedge."""
+    ctx = replace(_no_panels(1.6, 0.8), memory=_believes(FIT))
+    decision = _decide(ctx)
+    assert decision.strategy is Strategy.BUY_SHORTFALL
+    order = decision.orders[0]
+    assert decision.risk_quantile == pytest.approx(0.9)
+    # No panels, so the need's P90 is the load's P90.
+    assert order.kwh == pytest.approx(1.6 + 0.8, rel=1e-4)
+    assert order.firm and order.backed_kwh == pytest.approx(decision.short_kwh)
+
+
+def test_todays_market_corrects_a_stale_price_belief() -> None:
+    """Once the first hour clears near ₹7.4, well above the stale ₹3.61
+    belief, the next hour's estimate moves up and the hedge all but
+    disappears: at that price over-buying costs about as much as it saves."""
+    ctx = replace(_no_panels(1.6, 0.8), memory=_believes(FIT))
+    stale = _decide(ctx)
+    surprise = carry_surprise(0.0, believed=FIT, market_prices=(7.45, 7.37))
+    corrected = _decide(ctx, price_surprise=surprise)
+    assert corrected.expected_price == pytest.approx(FIT + surprise)
+    assert corrected.risk_quantile < 0.6
+    stale_hedge = stale.orders[0].kwh - stale.short_kwh
+    corrected_hedge = corrected.orders[0].kwh - corrected.short_kwh
+    assert 0.0 <= corrected_hedge < 0.2 * stale_hedge
+    assert any("clearing higher" in reason for reason in corrected.reasons)
+
+
+def test_a_price_surprise_fades_hour_by_hour() -> None:
+    first = carry_surprise(0.0, believed=4.0, market_prices=(7.0, 8.0))
+    assert first == pytest.approx(SURPRISE_PERSISTENCE * 3.5)
+    assert carry_surprise(first, believed=4.0, market_prices=()) == pytest.approx(
+        SURPRISE_PERSISTENCE * first
+    )
 
 
 def test_a_battery_with_room_buys_cheap_energy_to_store_for_tonight() -> None:

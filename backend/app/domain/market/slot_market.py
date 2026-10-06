@@ -15,8 +15,13 @@ behind every one of them.
    so every household always gets the electricity it needs, and neighbours
    are simply the cheaper option when they have some to spare. Optional
    orders never fall back to the EB (buying at retail to store would be a
-   loss). During an EB power cut there is no fallback at all: unmatched
-   firm demand is unserved and unmatched firm surplus has nowhere to go.
+   loss). Nor does a firm order's *hedge* — the margin an agent adds above
+   its expected need or surplus in case the forecast is off (`firm_kwh` is
+   the part the EB stands behind): a hedge is only worth having at a
+   neighbour's price, since anything the forecast missed is settled with
+   the EB in real time at the very same tariff. During an EB power cut
+   there is no fallback at all: unmatched firm demand is unserved and
+   unmatched firm surplus has nowhere to go.
 
 Pure per ADR-0006.
 """
@@ -42,6 +47,16 @@ class SlotOrder:
     firm: bool
     opening_price: float | None = None
     urgency: float = 0.5
+    # How much of a firm order the EB stands behind if neighbours don't take
+    # it; the rest is a hedge only neighbours can fill. None: all of it.
+    firm_kwh: float | None = None
+
+    @property
+    def backed_kwh(self) -> float:
+        """What the EB fills, less whatever neighbours match."""
+        if not self.firm:
+            return 0.0
+        return self.kwh if self.firm_kwh is None else min(self.kwh, self.firm_kwh)
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +102,9 @@ def clear_slot(
     for order in orders:
         if order.kwh <= 0:
             msg = f"order quantity must be positive, got {order.kwh} for {order.household_id}"
+            raise ValueError(msg)
+        if order.firm_kwh is not None and order.firm_kwh < 0:
+            msg = f"firm quantity can't be negative, got {order.firm_kwh} for {order.household_id}"
             raise ValueError(msg)
     seen: set[tuple[str, Side]] = set()
     for order in orders:
@@ -134,7 +152,7 @@ def clear_slot(
             matched = sum(
                 t.kwh for t in safety.trades if t.seller_household_id == order.household_id
             )
-        left = order.kwh - matched
+        left = order.backed_kwh - matched
         if left <= _EPSILON:
             continue
         if eb_available:

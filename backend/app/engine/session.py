@@ -24,7 +24,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.household_agent import decide_slot
-from app.agents.memory import AgentMemory, TickFeedback, learn
+from app.agents.memory import AgentMemory, TickFeedback, carry_surprise, learn
 from app.agents.persistence import load_memories, save_memory
 from app.agents.speech import outcome_message
 from app.agents.types import SessionContext, SlotObservation
@@ -379,6 +379,7 @@ async def plan_session(
     network = default_feeder([h.id for h in households])
     names = {h.id: h.display_name for h in households}
     committed = {h.id: [0.0] * horizon for h in households}
+    surprise = {h.id: 0.0 for h in households}
     chain: tuple[LedgerEntry, ...] = ()
 
     for slot in range(horizon):
@@ -388,6 +389,7 @@ async def plan_session(
                     context=replace(ctx, memory=memories.get(hid, AgentMemory())),
                     slot=slot,
                     committed_kwh=tuple(committed[hid]),
+                    price_surprise=surprise[hid],
                 )
             )
             for hid, ctx in contexts.items()
@@ -532,6 +534,17 @@ async def plan_session(
                     outcome=outcome,
                     reasons=list(decision.reasons),
                 )
+            )
+            # The market tape is public: every agent sees how this hour
+            # cleared against its own belief, whether it traded or not.
+            surprise[hid] = carry_surprise(
+                surprise[hid],
+                believed=memories.get(hid, AgentMemory()).expected_price(
+                    decision.hour_of_day,
+                    feed_in_tariff=feed_in[slot],
+                    retail_tariff=retail[slot],
+                ),
+                market_prices=market_prices,
             )
             if decision.orders and decision.limit_price is not None:
                 memories[hid] = learn(

@@ -3,9 +3,9 @@
 - every neighbour trade is priced inside [feed-in, retail] (nobody is worse
   off than dealing with the EB — objective O6);
 - nobody trades more than they offered;
-- while the EB is up, every firm order is fully covered — by neighbours or
-  by the EB — so no household is ever left short;
-- optional orders never touch the EB.
+- while the EB is up, the expected part of every firm order is fully
+  covered — by neighbours or by the EB — so no household is ever left short;
+- the EB never fills a hedge beyond that, and optional orders never touch it.
 """
 
 from __future__ import annotations
@@ -39,6 +39,7 @@ def _orders(draw: st.DrawFn) -> list[SlotOrder]:
                 firm=draw(st.booleans()),
                 opening_price=draw(st.none() | st.floats(min_value=0.0, max_value=15.0)),
                 urgency=draw(st.floats(min_value=0.0, max_value=1.0)),
+                firm_kwh=draw(st.none() | st.floats(min_value=0.0, max_value=4.0)),
             )
         )
     return orders
@@ -70,7 +71,8 @@ def test_every_firm_order_is_covered_while_the_eb_is_up(orders: list[SlotOrder])
             if f.household_id == order.household_id and f.side is order.side
         )
         matched = clearing.matched_kwh(order.household_id, order.side)
+        assert via_eb <= max(0.0, order.backed_kwh - matched) + 1e-6
         if order.firm:
-            assert matched + via_eb >= order.kwh - 1e-6
+            assert matched + via_eb >= order.backed_kwh - 1e-6
         else:
             assert via_eb == 0.0

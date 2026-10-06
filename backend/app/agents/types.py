@@ -44,6 +44,9 @@ class SlotObservation:
     slot: int
     # Neighbour contracts so far, per slot: + sold, - bought (kWh).
     committed_kwh: tuple[float, ...]
+    # How far this session's market is running above (+) or below (-) the
+    # agent's learned hour-of-day prices, ₹/kWh (`app.agents.memory.carry_surprise`).
+    price_surprise: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)

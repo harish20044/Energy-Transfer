@@ -105,6 +105,32 @@ def test_the_eb_takes_firm_leftovers_at_its_tariffs() -> None:
     assert all(f.price == RETAIL for f in clearing.eb_flows if f.side is Side.BID)
 
 
+@pytest.mark.parametrize(
+    ("neighbour_kwh", "from_eb"),
+    [(0.0, 2.0), (1.0, 1.0), (2.5, 0.0)],
+)
+def test_the_eb_backs_only_the_expected_part_of_a_hedged_order(
+    neighbour_kwh: float, from_eb: float
+) -> None:
+    """A buyer expecting to need 2 units hedges up to 3. Neighbours may fill
+    the whole 3; the EB fills only what's missing of the 2 — buying the
+    hedge from the EB ahead would cost retail for energy the EB supplies in
+    real time anyway if it turns out to be needed."""
+    orders = [SlotOrder("h3", Side.BID, 3.0, RETAIL, firm=True, firm_kwh=2.0)]
+    if neighbour_kwh:
+        orders.append(SlotOrder("h1", Side.ASK, neighbour_kwh, FIT, firm=False))
+    clearing = clear_slot(
+        0,
+        orders,
+        network=NETWORK,
+        feed_in_tariff=FIT,
+        retail_tariff=RETAIL,
+        eb_available=True,
+    )
+    assert clearing.matched_kwh("h3", Side.BID) == pytest.approx(neighbour_kwh)
+    assert sum(f.kwh for f in clearing.eb_flows) == pytest.approx(from_eb)
+
+
 def test_optional_orders_never_fall_back_to_the_eb() -> None:
     clearing = clear_slot(
         0,

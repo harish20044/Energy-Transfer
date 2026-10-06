@@ -41,8 +41,17 @@ def slot_message(decision: SlotDecision, obs: SlotObservation) -> str:
     limit, opening = decision.limit_price, decision.opening_price
     soc = _pct(decision.stored_kwh / ctx.battery_start.capacity_kwh)
     risk = f"P{round(decision.risk_quantile * 100)}" if decision.risk_quantile is not None else ""
+    hedged = decision.quantity_kwh - max(decision.spill_kwh, decision.short_kwh) > 0.05
     outage_later = any(not up for up in ctx.eb_available[s + 1 :])
     match decision.strategy:
+        case Strategy.SELL_SURPLUS if hedged:
+            return (
+                f"{when}: offering {q} — the panels should out-produce our load by about "
+                f"{units(decision.spill_kwh)} with the battery full, and the market's paying "
+                f"well, so I'm offering up to the {risk} of that surplus; the EB takes only the "
+                f"expected {units(decision.spill_kwh)} if neighbours don't. Asking "
+                f"{inr(opening)}, won't go below {inr(limit)}."
+            )
         case Strategy.SELL_SURPLUS:
             return (
                 f"{when}: offering {q} — the panels should out-produce our load by about "
@@ -62,12 +71,21 @@ def slot_message(decision: SlotDecision, obs: SlotObservation) -> str:
                 f"we'll need for the rest of the session, and I never sell below the "
                 f"{_pct(ctx.reserve)} reserve. Asking {inr(opening)}, floor {inr(limit)}."
             )
+        case Strategy.BUY_SHORTFALL if hedged:
+            return (
+                f"{when}: bidding for {q} — forecast load outruns our sun and battery by about "
+                f"{units(decision.short_kwh)}; neighbours are cheap enough that covering the "
+                f"{risk} of that need is worth it, since coming up short means paying the EB "
+                f"{inr(ctx.retail[s])}. The EB covers only the expected "
+                f"{units(decision.short_kwh)} if neighbours can't. Opening at {inr(opening)}, "
+                f"up to {inr(limit)}."
+            )
         case Strategy.BUY_SHORTFALL:
             return (
                 f"{when}: need {q} — forecast load outruns our sun and battery by about "
-                f"{units(decision.short_kwh)}; bidding for the {risk} of that need, since coming "
-                f"up short means paying the EB {inr(ctx.retail[s])}. Opening at {inr(opening)}, "
-                f"up to {inr(limit)}."
+                f"{units(decision.short_kwh)}; at the price I expect, hedging beyond that isn't "
+                f"worth it — anything extra comes from the EB at {inr(ctx.retail[s])} as it "
+                f"happens. Opening at {inr(opening)}, up to {inr(limit)}."
             )
         case Strategy.PREPARE_OUTAGE:
             return (
@@ -90,12 +108,20 @@ def slot_message(decision: SlotDecision, obs: SlotObservation) -> str:
 
 def reasons_for(decision: SlotDecision, obs: SlotObservation) -> tuple[str, ...]:
     ctx = obs.context
-    f = ctx.forecast[obs.slot]
+    s = obs.slot
+    f = ctx.forecast[s]
+    learned = ctx.memory.expected_price(
+        decision.hour_of_day, feed_in_tariff=ctx.feed_in[s], retail_tariff=ctx.retail[s]
+    )
+    price = f"Learned market price for {clock(decision.hour_of_day)}: {inr(learned)}"
+    if abs(decision.expected_price - learned) >= 0.05:
+        trend = "higher" if decision.expected_price > learned else "lower"
+        price += f"; expecting {inr(decision.expected_price)} — today's market is clearing {trend}"
     reasons = [
         f"Forecast load {f.consumption_p10:.2f}–{f.consumption_p90:.2f} kW (P10–P90), "
         f"solar {f.generation_p10:.2f}–{f.generation_p90:.2f} kW",
         f"Battery expected at {units(decision.stored_kwh)} as the hour starts",
-        f"Learned market price for {clock(decision.hour_of_day)}: {inr(decision.expected_price)}",
+        price,
     ]
     if decision.risk_quantile is not None:
         reasons.append(

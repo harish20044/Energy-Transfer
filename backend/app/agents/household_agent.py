@@ -15,11 +15,16 @@ hourly slot of a planning session, in time order, after its forecast is in.
   the EB at retail; holding back means exporting the rest at the feed-in
   rate. The cost-minimising commitment is a quantile of the forecast set by
   those two costs and the price the agent expects (its own learned
-  estimate, `app.agents.memory`) — sellers commit around their P35, buyers
-  around their P65 at typical prices, far more cautiously during a power
-  cut, when a broken promise means lights out.
+  estimate, corrected by how this session's market is actually clearing —
+  `app.agents.memory`) — sellers commit around their P35, buyers around
+  their P65 at typical prices, far more cautiously during a power cut, when
+  a broken promise means lights out. Never past the forecast's P10 to P90:
+  that band is what the forecaster is calibrated for (conformal, ~80%
+  coverage); beyond it a Gaussian tail is a guess, and a wrong price belief
+  would otherwise buy or promise several times what the house needs.
 - **order**: firm orders for a real surplus or shortfall (the EB takes what
-  neighbours don't), optional ones for opportunities — selling spare stored
+  neighbours don't of the *expected* quantity; the newsvendor's hedge on
+  top is for neighbours only), optional ones for opportunities — selling spare stored
   charge, or buying cheap neighbour energy to store for a shortfall later
   (never from the EB at retail — that would be a loss) — and firm buying
   ahead of a power cut. Opening prices come from the agent's learned margin.
@@ -57,7 +62,8 @@ _STORED_FLOOR_FRACTION = 0.85
 # During an EB power cut a broken promise means lights out, not a retail bill.
 _OUTAGE_SELL_QUANTILE = 0.1
 _OUTAGE_BUY_QUANTILE = 0.9
-_Z_BOUND = 0.9999
+# The forecast's calibrated band: commitments stay between its P10 and P90.
+_MIN_COMMIT_QUANTILE, _MAX_COMMIT_QUANTILE = 0.1, 0.9
 # P10 and P90 are 2 x 1.2816 standard deviations apart.
 _P10_P90_SIGMAS = 2 * 1.2816
 
@@ -79,8 +85,12 @@ class _State(TypedDict, total=False):
     decision: SlotDecision
 
 
+def _commit_quantile(quantile: float) -> float:
+    return min(_MAX_COMMIT_QUANTILE, max(_MIN_COMMIT_QUANTILE, quantile))
+
+
 def _z(quantile: float) -> float:
-    return NormalDist().inv_cdf(min(_Z_BOUND, max(1 - _Z_BOUND, quantile)))
+    return NormalDist().inv_cdf(_commit_quantile(quantile))
 
 
 def _perceive(state: _State) -> _State:
@@ -119,16 +129,16 @@ def _value(state: _State) -> _State:
     s = obs.slot
     f = ctx.forecast[s]
     fit, retail = ctx.feed_in[s], ctx.retail[s]
-    expected = ctx.memory.expected_price(f.hour_of_day, feed_in_tariff=fit, retail_tariff=retail)
-    expected = min(retail, max(fit, expected))
+    learned = ctx.memory.expected_price(f.hour_of_day, feed_in_tariff=fit, retail_tariff=retail)
+    expected = min(retail, max(fit, learned + obs.price_surprise))
     sigma = math.hypot(
         (f.generation_p90 - f.generation_p10) / _P10_P90_SIGMAS,
         (f.consumption_p90 - f.consumption_p10) / _P10_P90_SIGMAS,
     )
     if ctx.eb_available[s]:
         spread = max(retail - fit, 1e-6)
-        sell_q = (expected - fit) / spread  # cost of under-selling / total
-        buy_q = (retail - expected) / spread  # cost of under-buying / total
+        sell_q = _commit_quantile((expected - fit) / spread)  # under-selling cost / total
+        buy_q = _commit_quantile((retail - expected) / spread)  # under-buying cost / total
     else:
         sell_q, buy_q = _OUTAGE_SELL_QUANTILE, _OUTAGE_BUY_QUANTILE
 
@@ -168,7 +178,9 @@ def _order(state: _State) -> _State:
     soc = plan.stored_start_kwh / ctx.battery_start.capacity_kwh
     efficiency = ctx.battery_start.round_trip_efficiency
 
-    def ask(kwh: float, floor: float, *, firm: bool, urgency: float) -> SlotOrder:
+    def ask(
+        kwh: float, floor: float, *, firm: bool, urgency: float, firm_kwh: float | None = None
+    ) -> SlotOrder:
         floor = min(retail, max(fit, floor))
         return SlotOrder(
             household_id=ctx.household_id,
@@ -178,9 +190,12 @@ def _order(state: _State) -> _State:
             firm=firm,
             opening_price=min(retail, floor * (1 + memory.sell_margin)),
             urgency=min(1.0, max(0.0, urgency)),
+            firm_kwh=firm_kwh,
         )
 
-    def bid(kwh: float, ceiling: float, *, firm: bool, urgency: float) -> SlotOrder:
+    def bid(
+        kwh: float, ceiling: float, *, firm: bool, urgency: float, firm_kwh: float | None = None
+    ) -> SlotOrder:
         ceiling = min(retail, max(fit, ceiling))
         return SlotOrder(
             household_id=ctx.household_id,
@@ -190,6 +205,7 @@ def _order(state: _State) -> _State:
             firm=firm,
             opening_price=max(fit, ceiling * (1 - memory.buy_margin)),
             urgency=min(1.0, max(0.0, urgency)),
+            firm_kwh=firm_kwh,
         )
 
     sigma = state["sigma_kwh"]
@@ -201,12 +217,28 @@ def _order(state: _State) -> _State:
         risk = state["sell_quantile"]
         kwh = max(0.0, plan.spill_kwh + _z(risk) * sigma)
         if kwh > _MIN_ORDER_KWH:
-            orders = (ask(kwh, fit, firm=True, urgency=0.4 + 0.5 * soc),)
+            orders = (
+                ask(
+                    kwh,
+                    fit,
+                    firm=True,
+                    urgency=0.4 + 0.5 * soc,
+                    firm_kwh=min(kwh, plan.spill_kwh),
+                ),
+            )
             strategy = Strategy.SELL_SURPLUS
     elif plan.short_kwh > _MIN_ORDER_KWH:
         risk = state["buy_quantile"]
         kwh = plan.short_kwh + max(0.0, _z(risk) * sigma)
-        orders = (bid(kwh, retail, firm=True, urgency=0.4 + 0.5 * (1 - soc)),)
+        orders = (
+            bid(
+                kwh,
+                retail,
+                firm=True,
+                urgency=0.4 + 0.5 * (1 - soc),
+                firm_kwh=plan.short_kwh,
+            ),
+        )
         strategy = Strategy.BUY_SHORTFALL
     elif state["outage_need_kwh"] > _MIN_ORDER_KWH and state["storable_kwh"] > _MIN_ORDER_KWH:
         kwh = min(state["storable_kwh"], state["outage_need_kwh"] / efficiency)
