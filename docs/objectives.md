@@ -4,14 +4,17 @@ The Zeroth Review stated directional outcomes ("accurate forecasting", "efficien
 cannot be passed or failed. This document turns each into something falsifiable, with a formula, a
 baseline and a target.
 
-Every number is produced by the evaluation harness (`scripts/evaluate.py`, phase P6) from a single
-seeded run, so the table below regenerates identically on any machine.
+Every number is meant to come from an evaluation harness (`scripts/evaluate.py`) run over seeded
+sessions, so the table regenerates identically on any machine. **That harness is not built yet.** Today
+the forecaster's held-out metrics (O1) and per-session statements (O6) exist; the rest are measured by
+hand or not at all.
 
 ---
 
 ## O1 · Accurate short-term forecasting
 
-**Measures:** 15-minute-ahead household load and PV generation.
+**Measures:** hourly household load and PV generation, 1 to 24 hours ahead, the horizon a planning
+session needs ([ADR-0010](adr/0010-hourly-forecasts-with-conformal-calibration.md)).
 
 **Point accuracy** — normalised mean absolute error, so households of different sizes are comparable:
 
@@ -59,8 +62,8 @@ future — quantifying it is a result in itself.
 Two things must both hold:
 
 1. **Autonomy** — the fraction of ticks that clear and settle with no human input. **Target: 100%.**
-2. **Latency** — wall-clock time from gate close to settled allocation, at 100 agents.
-   **Target: p95 < 200 ms.**
+2. **Latency** — wall-clock time to clear one hourly slot of a planning session (agent decisions,
+   negotiation, grid safety), at 100 agents. **Target: p95 < 200 ms.**
 
 Latency is measured with a Prometheus histogram over the clearing path only, excluding LLM explanation
 generation, which is asynchronous by design.
@@ -118,11 +121,17 @@ But the mean can hide someone being made worse off, so a second and stricter con
 
 $$\forall h \in \text{households}: \quad \text{bill}^{\text{P2P}}_h \le \text{bill}^{\text{grid-only}}_h$$
 
-**Target: holds for every household, in every tick.** This is structurally guaranteed by bounding the
-clearing price to `[feed_in_tariff, retail_tariff]` — a seller never accepts less than the utility would
-pay, a buyer never pays more than the utility would charge — and it is verified by property test rather
-than assumed. Startup configuration validation rejects an inverted tariff band outright, because it would
-make the guarantee unachievable.
+This holds at two levels, and they need different evidence.
+
+- **Per trade: structural.** Every trade clears inside `[feed_in_tariff, retail_tariff]`. A seller never
+  accepts less than the utility would pay, and a buyer never pays more than it would charge. A property
+  test verifies this rather than assuming it. Startup configuration validation rejects an inverted tariff
+  band outright, because it would make the guarantee unachievable.
+- **Per session: empirical.** Agents commit hours ahead under forecast uncertainty
+  ([ADR-0009](adr/0009-newsvendor-agents-in-the-calibrated-band.md)). A hedge that turns out not to be
+  needed, or a forecast miss, can leave a household's whole-session bill above its EB-only bill, even
+  though every trade was in the band. Each session statement reports the EB-only comparison per
+  household. **Target: no household worse off in the evaluation sessions**, measured, not assumed.
 
 ---
 
