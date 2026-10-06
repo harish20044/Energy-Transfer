@@ -77,7 +77,9 @@ class Check:
 
     @property
     def passed(self) -> bool:
-        return self.low <= self.measured <= self.high
+        # bool(): a numpy `measured` would otherwise yield numpy.bool_,
+        # which the JSON export can't serialise.
+        return bool(self.low <= self.measured <= self.high)
 
 
 @dataclass(slots=True)
@@ -93,8 +95,11 @@ class ValidationReport:
     def to_json(self) -> dict[str, object]:
         return {
             "passed": self.passed,
-            "checks": [{**asdict(c), "passed": c.passed} for c in self.checks],
-            "series": self.series,
+            "checks": [
+                {**asdict(c), "measured": float(c.measured), "passed": c.passed}
+                for c in self.checks
+            ],
+            "series": {name: [float(v) for v in values] for name, values in self.series.items()},
         }
 
 
