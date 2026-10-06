@@ -215,6 +215,7 @@ async def test_talking_to_the_agent_is_grounded_in_its_records(
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["provider"] == "stub"
+    assert body["model"] == ""
     assert "get_my_plan" in body["tools_used"]
     assert "2 pm" in body["reply"]
 

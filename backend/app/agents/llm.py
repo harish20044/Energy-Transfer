@@ -29,6 +29,8 @@ class ChatProviderError(RuntimeError):
 
 class ChatProvider(Protocol):
     name: str
+    # The model that answers, for display; "" when there is none (the stub).
+    model: str
 
     async def complete(self, messages: list[Message], tools: list[Message]) -> Message:
         """The assistant's next message: text in `content`, and/or
@@ -48,15 +50,15 @@ class OpenAICompatibleProvider:
         max_retries: int,
     ) -> None:
         self.name = name
+        self.model = model
         self._url = f"{base_url.rstrip('/')}/chat/completions"
-        self._model = model
         self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         self._timeout = timeout_seconds
         self._retries = max_retries
 
     async def complete(self, messages: list[Message], tools: list[Message]) -> Message:
         payload: Message = {
-            "model": self._model,
+            "model": self.model,
             "messages": messages,
             "temperature": 0.3,
             "max_tokens": 600,
@@ -88,6 +90,7 @@ class StubProvider:
     answers by reading the tool results back plainly."""
 
     name = "stub"
+    model = ""
 
     async def complete(self, messages: list[Message], tools: list[Message]) -> Message:
         tool_results = [m for m in messages if m.get("role") == "tool"]

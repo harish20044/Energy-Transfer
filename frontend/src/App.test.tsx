@@ -386,6 +386,7 @@ function stubApi({
         jsonResponse({
           reply: 'I sold 1.20 units to House 3 at ₹6.40 because our panels were ahead of our load.',
           provider: 'stub',
+          model: '',
           tools_used: ['get_my_plan'],
         }),
       );
@@ -678,6 +679,42 @@ describe('agent chat', () => {
       await screen.findByText(/because our panels were ahead of our load/),
     ).toBeInTheDocument();
     expect(calls(fetchMock, '/agents/me/chat')).toHaveLength(1);
+    expect(screen.getByText(/Answered from your records without a model/)).toBeInTheDocument();
+  });
+
+  it('renders the model’s bold text and bullets, and names the model that answered', async () => {
+    const fetchMock = stubApi();
+    const base = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes('/agents/me/chat')) {
+        return Promise.resolve(
+          jsonResponse({
+            reply:
+              'You saved **₹25.28** this session.\n\n**Why:**\n' +
+              '- Bought 16.8 units from neighbours\n- Sold 2.6 units to the EB',
+            provider: 'groq',
+            model: 'openai/gpt-oss-120b',
+            tools_used: ['get_my_money'],
+          }),
+        );
+      }
+      return base ? base(input, init) : Promise.reject(new Error('no stub'));
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByLabelText('Message your agent'), 'How much did I save?');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    const amount = await screen.findByText('₹25.28');
+    expect(amount.tagName).toBe('STRONG');
+    expect(screen.queryByText(/\*\*/)).not.toBeInTheDocument();
+    const bullets = screen.getByText('Bought 16.8 units from neighbours').closest('ul');
+    expect(bullets).not.toBeNull();
+    expect(within(bullets as HTMLElement).getAllByRole('listitem')).toHaveLength(2);
+    expect(
+      screen.getByText(/Groq · openai\/gpt-oss-120b · checked get_my_money/),
+    ).toBeInTheDocument();
   });
 });
 
@@ -761,6 +798,51 @@ describe('interactions', () => {
     expect(body.power_cut).toBeNull();
   }, 20_000);
 
+  it('the plan form appears only once the last session is restored', async () => {
+    stubApi();
+    window.history.pushState({}, '', '/session');
+    render(<App />);
+
+    // Nothing editable while the last session loads: restoring it later
+    // would overwrite whatever had been changed.
+    expect(screen.queryByLabelText('Start time')).not.toBeInTheDocument();
+    expect(await screen.findByLabelText('Start time')).toHaveValue('14');
+    expect(screen.queryByText('Loading your last session…')).not.toBeInTheDocument();
+  });
+
+  it('the mixed preset sends three homes with no panels and no battery', async () => {
+    const fetchMock = stubApi({ status: 'setup' });
+    const user = userEvent.setup();
+    window.history.pushState({}, '', '/session');
+    render(<App />);
+
+    await screen.findByText('House 3');
+    const preset = screen.getByRole('button', { name: 'Mixed neighbourhood' });
+    await waitFor(() => {
+      expect(preset).toBeEnabled();
+    });
+    await user.click(preset);
+    await user.click(screen.getByRole('button', { name: /predict & trade/i }));
+
+    await waitFor(() => {
+      expect(calls(fetchMock, '/session/plan')).toHaveLength(1);
+    });
+    const body = JSON.parse(
+      String((calls(fetchMock, '/session/plan')[0]?.[1] as RequestInit).body),
+    ) as {
+      households: {
+        household_id: string;
+        panel_derate: number;
+        battery_capacity_kwh: number | null;
+      }[];
+    };
+    const bare = body.households
+      .filter((h) => h.panel_derate === 1 && h.battery_capacity_kwh === 0)
+      .map((h) => h.household_id);
+    expect(bare.length).toBeGreaterThan(0);
+    expect(bare.every((id) => ['h3', 'h5', 'h8'].includes(id))).toBe(true);
+  }, 20_000);
+
   it('a rejected plan shows why and stays on the page', async () => {
     stubApi({ status: 'setup', planFails: true });
     const user = userEvent.setup();
@@ -820,13 +902,46 @@ describe('interactions', () => {
 
     expect(await screen.findByText('What your agent has learned')).toBeInTheDocument();
     expect(await screen.findByText('₹6.4')).toBeInTheDocument();
-    const slider = screen.getByRole('slider');
+    const slider = screen.getByRole('slider', { name: 'Battery reserve' });
+    fireEvent.change(slider, { target: { value: '55' } });
     fireEvent.change(slider, { target: { value: '60' } });
-    fireEvent.mouseUp(slider, { target: { value: '60' } });
 
     await waitFor(() => {
       expect(calls(fetchMock, '/households/me/evening-reserve', 'PATCH')).toHaveLength(1);
     });
+    expect(slider).toHaveAttribute('aria-valuetext', '60%');
+  });
+
+  it('a reserve changed with the arrow keys is saved too', async () => {
+    const fetchMock = stubApi();
+    window.history.pushState({}, '', '/settings');
+    render(<App />);
+
+    const slider = await screen.findByRole('slider', { name: 'Battery reserve' });
+    slider.focus();
+    fireEvent.keyDown(slider, { key: 'ArrowRight' });
+    fireEvent.change(slider, { target: { value: '45' } });
+
+    await waitFor(() => {
+      expect(calls(fetchMock, '/households/me/evening-reserve', 'PATCH')).toHaveLength(1);
+    });
+    expect(slider).toHaveFocus();
+  });
+
+  it('a reserve that fails to save says so', async () => {
+    const fetchMock = stubApi();
+    const base = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes('/evening-reserve')) return Promise.reject(new Error('offline'));
+      return base ? base(input, init) : Promise.reject(new Error('no stub'));
+    });
+    window.history.pushState({}, '', '/settings');
+    render(<App />);
+
+    const slider = await screen.findByRole('slider', { name: 'Battery reserve' });
+    fireEvent.change(slider, { target: { value: '70' } });
+
+    expect(await screen.findByText(/Couldn’t save the reserve/)).toBeInTheDocument();
   });
 
   it('the network flags households the safety layer curtailed', async () => {

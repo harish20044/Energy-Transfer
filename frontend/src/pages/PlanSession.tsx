@@ -79,7 +79,7 @@ function Field({
 
 export function PlanSession() {
   const { accessToken } = useAuth();
-  const { session, plan, busy, error } = useLiveData();
+  const { session, loading, plan, busy, error } = useLiveData();
   const navigate = useNavigate();
 
   const [simDate, setSimDate] = useState('2026-05-15');
@@ -97,9 +97,16 @@ export function PlanSession() {
   const [initialised, setInitialised] = useState(false);
 
   // Start from the current session's setup, so "New session" tweaks the
-  // last one rather than starting from scratch.
+  // last one rather than starting from scratch. This happens exactly once,
+  // before the form is shown (see below): restoring later would overwrite
+  // whatever the user had already changed.
   useEffect(() => {
-    if (session === null || initialised) return;
+    if (initialised) return;
+    if (session === null) {
+      // Nothing to restore once the first load has finished without one.
+      if (!loading) setInitialised(true);
+      return;
+    }
     setInitialised(true);
     if (session.status === 'setup') return;
     setSimDate(session.sim_date);
@@ -129,7 +136,7 @@ export function PlanSession() {
       };
     }
     setRows(restored);
-  }, [session, initialised]);
+  }, [session, loading, initialised]);
 
   useEffect(() => {
     if (accessToken === null) return;
@@ -145,6 +152,10 @@ export function PlanSession() {
   }, [accessToken]);
 
   const row = (id: string): HouseRow => rows[id] ?? defaultRow(startHour);
+  // Presets write one row per household, and the last session's setup is
+  // restored when the session arrives; a preset applied before both have
+  // loaded would be silently empty, or overwritten.
+  const presetsReady = householdIds.length > 0 && initialised;
   const setRow = (id: string, patch: Partial<HouseRow>) => {
     setRows((current) => ({
       ...current,
@@ -207,6 +218,14 @@ export function PlanSession() {
   }
 
   const scenarioInfo = SCENARIOS.find((s) => s.value === scenario);
+
+  if (!initialised) {
+    return (
+      <div className="flex h-64 items-center justify-center text-sm text-stone-400">
+        Loading your last session…
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto flex max-w-[1400px] flex-col gap-5">
@@ -405,28 +424,31 @@ export function PlanSession() {
             <span className="text-xs font-medium text-stone-400">Presets:</span>
             <button
               type="button"
+              disabled={!presetsReady}
               onClick={() => {
                 applyPreset('identical');
               }}
-              className="rounded-lg bg-stone-100 px-2.5 py-1 text-xs font-semibold text-stone-700 hover:bg-stone-200"
+              className="rounded-lg bg-stone-100 px-2.5 py-1 text-xs font-semibold text-stone-700 hover:bg-stone-200 disabled:cursor-not-allowed disabled:opacity-50"
             >
               Identical homes
             </button>
             <button
               type="button"
+              disabled={!presetsReady}
               onClick={() => {
                 applyPreset('mixed');
               }}
-              className="rounded-lg bg-stone-100 px-2.5 py-1 text-xs font-semibold text-stone-700 hover:bg-stone-200"
+              className="rounded-lg bg-stone-100 px-2.5 py-1 text-xs font-semibold text-stone-700 hover:bg-stone-200 disabled:cursor-not-allowed disabled:opacity-50"
             >
               Mixed neighbourhood
             </button>
             <button
               type="button"
+              disabled={!presetsReady}
               onClick={() => {
                 applyPreset('cut');
               }}
-              className="rounded-lg bg-stone-100 px-2.5 py-1 text-xs font-semibold text-stone-700 hover:bg-stone-200"
+              className="rounded-lg bg-stone-100 px-2.5 py-1 text-xs font-semibold text-stone-700 hover:bg-stone-200 disabled:cursor-not-allowed disabled:opacity-50"
             >
               Evening power cut
             </button>

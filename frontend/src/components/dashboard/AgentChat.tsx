@@ -1,5 +1,6 @@
 import { Bot, Loader2, Send, User } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 
 import { chatWithAgent, type ChatTurn } from '@/api/agents';
 import { ApiError } from '@/api/client';
@@ -12,6 +13,59 @@ const SUGGESTIONS = [
   'How much are we saving this session?',
   'Keep 60% charge in the battery from now on.',
 ];
+
+/** `**bold**` inside a line; stray single-asterisk emphasis is dropped. */
+function inline(text: string): ReactNode[] {
+  return text.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
+    part.length > 4 && part.startsWith('**') && part.endsWith('**') ? (
+      <strong key={i} className="font-semibold text-stone-900">
+        {part.slice(2, -2)}
+      </strong>
+    ) : (
+      part.replace(/\*([^*\s][^*]*)\*/g, '$1')
+    ),
+  );
+}
+
+/** The model answers in light Markdown: bold, bullet lists, the odd heading.
+ *  Render that subset as React elements, never as raw HTML. */
+function AgentText({ text }: { text: string }) {
+  const blocks: ReactNode[] = [];
+  let bullets: string[] = [];
+  const flush = () => {
+    if (bullets.length === 0) return;
+    const items = bullets;
+    blocks.push(
+      <ul key={blocks.length} className="list-disc space-y-1 pl-4">
+        {items.map((item, i) => (
+          <li key={i}>{inline(item)}</li>
+        ))}
+      </ul>,
+    );
+    bullets = [];
+  };
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    const bullet = /^[-*•]\s+(.*)$/.exec(line);
+    if (bullet !== null) {
+      bullets.push(bullet[1] ?? '');
+      continue;
+    }
+    flush();
+    if (line === '') continue;
+    const heading = /^#{1,6}\s+(.*)$/.exec(line);
+    blocks.push(
+      <p
+        key={blocks.length}
+        className={heading !== null ? 'font-semibold text-stone-900' : undefined}
+      >
+        {inline(heading !== null ? (heading[1] ?? '') : line)}
+      </p>,
+    );
+  }
+  flush();
+  return <div className="space-y-2">{blocks}</div>;
+}
 
 /** Talk to the household's agent. The answers come from an LLM that can
  *  only read the agent's real records — it never trades. */
@@ -37,8 +91,12 @@ export function AgentChat() {
     try {
       const reply = await chatWithAgent(accessToken, text, before.slice(-10));
       setHistory((h) => [...h, { role: 'assistant', content: reply.reply }]);
+      const who =
+        reply.model === ''
+          ? 'Answered from your records without a model'
+          : `${reply.provider === 'groq' ? 'Groq' : reply.provider} · ${reply.model}`;
       setMeta(
-        `${reply.provider === 'groq' ? 'Groq · gpt-oss-120b' : reply.provider}` +
+        who +
           (reply.tools_used.length > 0
             ? ` · checked ${[...new Set(reply.tools_used)].join(', ')}`
             : ''),
@@ -85,14 +143,15 @@ export function AgentChat() {
                 <Bot className="size-4" aria-hidden="true" />
               )}
             </span>
-            <p
-              className={cn(
-                'max-w-[85%] rounded-xl px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap',
-                turn.role === 'user' ? 'bg-stone-900 text-white' : 'bg-stone-100 text-stone-800',
-              )}
-            >
-              {turn.content}
-            </p>
+            {turn.role === 'user' ? (
+              <p className="max-w-[85%] rounded-xl bg-stone-900 px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap text-white">
+                {turn.content}
+              </p>
+            ) : (
+              <div className="max-w-[85%] rounded-xl bg-stone-100 px-3 py-2 text-sm leading-relaxed text-stone-800">
+                <AgentText text={turn.content} />
+              </div>
+            )}
           </div>
         ))}
         {sending && (

@@ -23,6 +23,8 @@ export interface ChatTurn {
 export interface ChatReply {
   reply: string;
   provider: string;
+  /** The model that answered; empty when the built-in template answered. */
+  model: string;
   tools_used: string[];
 }
 

@@ -1,5 +1,5 @@
 import { BatteryCharging, Bot, Brain, Scale } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { fetchOwnAgent, type AgentMemory } from '@/api/agents';
 
@@ -9,6 +9,9 @@ import { Badge } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
 import { hourLabel, inr, kw, kwh, percent } from '@/lib/format';
 import { useLiveData } from '@/live/useLiveData';
+
+/** How long the reserve slider waits after the last change before saving. */
+const RESERVE_SAVE_DELAY_MS = 400;
 
 interface PreferenceRowProps {
   label: string;
@@ -46,7 +49,23 @@ export function Settings() {
   const feedIn = session?.feed_in_tariff ?? 3.61;
   const retail = session?.retail_tariff ?? 10.5;
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [draftReserve, setDraftReserve] = useState<number | null>(null);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const savedReserve = household?.evening_reserve;
+
+  // Once the saved value comes back (from this page, or from the agent chat),
+  // show it rather than a stale draft.
+  useEffect(() => {
+    setDraftReserve(null);
+  }, [savedReserve]);
+
+  useEffect(
+    () => () => {
+      if (saveTimer.current !== null) clearTimeout(saveTimer.current);
+    },
+    [],
+  );
 
   if (household === null) {
     return (
@@ -61,13 +80,27 @@ export function Settings() {
   async function commitReserve(pct: number): Promise<void> {
     if (accessToken === null) return;
     setSaving(true);
+    setSaveError(null);
     try {
       await updateEveningReserve(accessToken, pct / 100);
       refreshHousehold();
+    } catch {
+      setSaveError('Couldn’t save the reserve. Check your connection and move the slider again.');
+      setDraftReserve(null);
     } finally {
       setSaving(false);
-      setDraftReserve(null);
     }
+  }
+
+  // Saves a moment after the last change, so dragging, tapping and arrow
+  // keys all save the same way, once.
+  function changeReserve(pct: number): void {
+    setDraftReserve(pct);
+    if (saveTimer.current !== null) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      saveTimer.current = null;
+      void commitReserve(pct);
+    }, RESERVE_SAVE_DELAY_MS);
   }
 
   return (
@@ -85,26 +118,36 @@ export function Settings() {
       >
         <div className="flex items-center justify-between gap-6 border-b border-stone-100 py-3.5">
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold text-stone-900">Battery reserve</p>
-            <p className="mt-0.5 text-xs text-stone-500">
+            <label htmlFor="battery-reserve" className="text-sm font-semibold text-stone-900">
+              Battery reserve
+            </label>
+            <p id="battery-reserve-help" className="mt-0.5 text-xs text-stone-500">
               The charge level your agent never sells below. It still uses the battery for your own
               home; this only protects stored charge from being sold. Applies from the next session
               you plan.
             </p>
             <input
+              id="battery-reserve"
               type="range"
               min={0}
               max={90}
               step={5}
               value={reservePct}
-              disabled={saving || household.battery_capacity_kwh <= 0}
+              aria-describedby="battery-reserve-help"
+              aria-valuetext={`${String(reservePct)}%`}
+              disabled={household.battery_capacity_kwh <= 0}
               onChange={(e) => {
-                setDraftReserve(Number(e.target.value));
+                changeReserve(Number(e.target.value));
               }}
-              onMouseUp={(e) => void commitReserve(Number(e.currentTarget.value))}
-              onTouchEnd={(e) => void commitReserve(Number(e.currentTarget.value))}
               className="mt-3 w-full accent-battery-600 disabled:opacity-50"
             />
+            <p className="mt-1 h-4 text-xs" aria-live="polite">
+              {saveError !== null ? (
+                <span className="text-grid-700">{saveError}</span>
+              ) : saving ? (
+                <span className="text-stone-500">Saving…</span>
+              ) : null}
+            </p>
           </div>
           <span className="shrink-0 font-mono text-sm font-semibold text-stone-900 tnum">
             {reservePct}%

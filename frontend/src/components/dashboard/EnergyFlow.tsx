@@ -115,7 +115,16 @@ function FlowPath({ d, color, active }: FlowPathProps) {
   );
 }
 
-export function EnergyFlow({ livePower, peerCount }: { livePower: LivePower; peerCount: number }) {
+export function EnergyFlow({
+  livePower,
+  peerCount,
+  hasBattery = true,
+}: {
+  livePower: LivePower;
+  peerCount: number;
+  /** False when this home has no battery for the session (a what-if). */
+  hasBattery?: boolean;
+}) {
   const importingFromGrid = livePower.gridKw > 0;
   const exportingToPeers = livePower.peerKw > 0;
 
@@ -168,9 +177,14 @@ export function EnergyFlow({ livePower, peerCount }: { livePower: LivePower; pee
         top="50%"
         icon={BatteryCharging}
         label="Battery"
-        value={kw(Math.abs(livePower.batteryKw))}
-        caption={`${livePower.batteryKw > 0 ? 'charging' : livePower.batteryKw < 0 ? 'discharging' : 'idle'} · ${percent(livePower.batterySoc)}`}
+        value={hasBattery ? kw(Math.abs(livePower.batteryKw)) : 'None'}
+        caption={
+          hasBattery
+            ? `${livePower.batteryKw > 0 ? 'charging' : livePower.batteryKw < 0 ? 'discharging' : 'idle'} · ${percent(livePower.batterySoc)}`
+            : 'no battery this session'
+        }
         tone="battery"
+        idle={!hasBattery}
       />
       <FlowNode
         left="86.7%"

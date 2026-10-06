@@ -37,4 +37,6 @@ class ChatIn(BaseModel):
 class ChatOut(BaseModel):
     reply: str
     provider: str
+    # The model that answered; "" when the stub answered (no model at all).
+    model: str = ""
     tools_used: list[str]

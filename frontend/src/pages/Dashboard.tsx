@@ -134,7 +134,9 @@ export function Dashboard() {
 
       {statement !== null && <MoneyCards statement={statement} />}
 
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
+      {/* items-start: each card is as tall as its own content, so the flow
+          diagram doesn't stretch over empty space beside a long family list. */}
+      <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-3">
         <Card
           className="xl:col-span-2"
           title="Energy flow"
@@ -152,7 +154,7 @@ export function Dashboard() {
           }
           contentClassName="p-2"
         >
-          <EnergyFlow livePower={livePower} peerCount={partners.size} />
+          <EnergyFlow livePower={livePower} peerCount={partners.size} hasBattery={capacity > 0} />
         </Card>
 
         <Card title="Who's home" subtitle="What's actually driving your consumption right now">

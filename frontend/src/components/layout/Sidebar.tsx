@@ -25,8 +25,9 @@ export function Sidebar() {
   const slot =
     latest !== undefined ? own?.slots[Math.floor(latest.tick_index / ticksPerHour)] : undefined;
   const neighbourKw = slot !== undefined ? slot.p2p_sold_kwh - slot.p2p_bought_kwh : 0;
-  const startSoc = session?.households.find((h) => h.household_id === own?.household_id)?.start_soc;
-  const batterySocPct = (latest?.battery_soc ?? startSoc ?? 0) * 100;
+  const setup = session?.households.find((h) => h.household_id === own?.household_id);
+  const batterySocPct = (latest?.battery_soc ?? setup?.start_soc ?? 0) * 100;
+  const noBattery = setup?.battery_capacity_kwh === 0;
 
   return (
     <aside className="flex w-64 shrink-0 flex-col border-r border-stone-200 bg-white">
@@ -83,7 +84,7 @@ export function Sidebar() {
           <div className="mt-2 flex items-center justify-between">
             <span className="text-xs font-medium text-stone-500">Battery</span>
             <span className="font-mono text-xs font-semibold text-battery-600 tnum">
-              {percent(batterySocPct)}
+              {noBattery ? 'None' : percent(batterySocPct)}
             </span>
           </div>
         </div>

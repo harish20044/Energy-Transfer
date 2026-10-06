@@ -58,10 +58,13 @@ async def chat(
     """Ask the household's agent anything about its plan, its trades or the
     family's electricity — or tell it to keep more charge in reserve."""
     household = await _own_household(current_user, db)
+    configured = get_provider(settings)
     reply, tools_used, provider = await converse(
         ToolContext(db=db, user=current_user, household=household, settings=settings),
-        get_provider(settings),
+        configured,
         [turn.model_dump() for turn in body.history],
         body.message,
     )
-    return ChatOut(reply=reply, provider=provider, tools_used=tools_used)
+    # After a fallback the stub answered, not the configured model.
+    model = configured.model if provider == configured.name else ""
+    return ChatOut(reply=reply, provider=provider, model=model, tools_used=tools_used)
