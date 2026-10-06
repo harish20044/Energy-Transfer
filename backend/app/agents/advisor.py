@@ -36,6 +36,9 @@ from app.models.user import User
 from app.schemas.household import EveningReserveUpdate
 
 MAX_TOOL_ROUNDS = 4
+# The reserve the advisor may set, in percent. Enforced here, not just
+# declared in the tool schema: a model can ignore a schema.
+RESERVE_PERCENT_RANGE = (10, 90)
 
 ToolFn = Callable[[dict[str, Any]], Awaitable[Any]]
 
@@ -110,7 +113,13 @@ def tool_specs() -> list[Message]:
             "set_reserve",
             "Change the battery reserve: the charge level the agent never sells below. Only "
             "when the user clearly asks. Applies from the next planned session.",
-            {"percent": {"type": "integer", "minimum": 10, "maximum": 90}},
+            {
+                "percent": {
+                    "type": "integer",
+                    "minimum": RESERVE_PERCENT_RANGE[0],
+                    "maximum": RESERVE_PERCENT_RANGE[1],
+                }
+            },
         ),
     ]
 
@@ -241,9 +250,16 @@ def build_tools(ctx: ToolContext) -> dict[str, ToolFn]:
         }
 
     async def set_reserve(args: dict[str, Any]) -> Any:
+        low, high = RESERVE_PERCENT_RANGE
         try:
-            update = EveningReserveUpdate(evening_reserve=float(args.get("percent", 0)) / 100.0)
-        except (ValidationError, TypeError, ValueError) as exc:
+            percent = float(args["percent"])
+        except (KeyError, TypeError, ValueError):
+            return {"error": f"set_reserve needs a percent from {low} to {high}"}
+        if not low <= percent <= high:
+            return {"error": f"a reserve must be {low}-{high}%, not {percent:g}%"}
+        try:
+            update = EveningReserveUpdate(evening_reserve=percent / 100.0)
+        except ValidationError as exc:
             return {"error": f"not a valid reserve: {exc}"}
         ctx.household.evening_reserve = update.evening_reserve
         await ctx.db.commit()
