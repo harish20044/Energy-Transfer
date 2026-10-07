@@ -63,7 +63,10 @@ _PARAMS = {
     "deterministic": True,
     "verbose": -1,
 }
-_BOOST_ROUNDS = 300
+# Chosen on the calibration days (never the test days): load P50 error keeps
+# falling to 1,500 rounds — 24.8% better than same-hour-yesterday at 300,
+# 29.4% at 1,500.
+_BOOST_ROUNDS = 1500
 # Generation rows count as daylight (and so get calibrated/scored) above this
 # clear-sky potential; at night both forecast and actual are exactly zero.
 _DAYLIGHT_CLEAR_SKY_KW = 0.05
@@ -132,7 +135,8 @@ def finish_quantiles(
 ) -> QuantilePredictions:
     """Any forecaster's raw (rows x [P10, P50, P90]) output per target, made
     usable: sorted so quantiles never cross (Chernozhukov et al., 2010),
-    widened by conformal offsets if given, and clamped at zero."""
+    widened by conformal offsets if given, clamped at zero, and zero solar
+    wherever the panels can't see the sun."""
     horizons = features["horizon_hours"].to_numpy().astype(int)
     daylight = _daylight(features)
     result: QuantilePredictions = {}
@@ -148,6 +152,10 @@ def finish_quantiles(
             ordered[:, 0] -= lower
             ordered[:, 2] += upper
         ordered = np.clip(ordered, 0.0, None)
+        if target == TARGET_GENERATION:
+            # No sun on the panels (night, or no panels at all) means no
+            # solar, exactly: physics, not something to leave to a model.
+            ordered[features["clear_sky_pv_kw"].to_numpy() <= 0.0] = 0.0
         result[target] = {q: ordered[:, i] for i, q in enumerate(QUANTILES)}
     return result
 

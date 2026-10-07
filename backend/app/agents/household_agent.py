@@ -74,13 +74,19 @@ _OUTAGE_BUY_QUANTILE = 0.9
 # The forecast's calibrated band: commitments stay between its P10 and P90.
 _MIN_COMMIT_QUANTILE, _MAX_COMMIT_QUANTILE = 0.1, 0.9
 # P10 and P90 are 2 x 1.2816 standard deviations apart.
-_P10_P90_SIGMAS = 2 * 1.2816
+_Z_P90 = 1.2816
+_P10_P90_SIGMAS = 2 * _Z_P90
 
 
 class _State(TypedDict, total=False):
     obs: SlotObservation
     plans: tuple[SlotPlan, ...]
+    # The same walk on the cautious view: P10 sun, P90 load.
+    cautious_plans: tuple[SlotPlan, ...]
+    floors: tuple[float, ...]
     outage_hold_kwh: float
+    # The battery walked with the forecast at the seller's commitment quantile.
+    sell_path_plans: tuple[SlotPlan, ...]
     sigma_kwh: float
     expected_price: float
     sell_quantile: float
@@ -100,6 +106,13 @@ def _commit_quantile(quantile: float) -> float:
 
 def _z(quantile: float) -> float:
     return NormalDist().inv_cdf(_commit_quantile(quantile))
+
+
+def _at_quantile(p10: float, p50: float, p90: float, quantile: float) -> float:
+    """A forecast value at `quantile`, interpolated through P10/P50/P90 on a
+    normal scale (each side with its own spread)."""
+    z = _z(quantile) / _Z_P90
+    return max(0.0, p50 + z * ((p50 - p10) if z < 0 else (p90 - p50)))
 
 
 def _perceive(state: _State) -> _State:
@@ -129,7 +142,20 @@ def _project(state: _State) -> _State:
             )
         floors.append(min(0.95 * battery.capacity_kwh, protection + hold))
     plans = project(battery, net, floor_kwh=floors)
-    return {"plans": plans, "outage_hold_kwh": floors[obs.slot] - protection}
+    cautious = project(
+        battery,
+        [
+            f.generation_p10 - f.consumption_p90 - committed
+            for f, committed in zip(ctx.forecast, obs.committed_kwh, strict=True)
+        ],
+        floor_kwh=floors,
+    )
+    return {
+        "plans": plans,
+        "cautious_plans": cautious,
+        "floors": tuple(floors),
+        "outage_hold_kwh": floors[obs.slot] - protection,
+    }
 
 
 def _value(state: _State) -> _State:
@@ -165,7 +191,24 @@ def _value(state: _State) -> _State:
     outage_need = sum(
         plans[t].short_kwh for t in range(s + 1, len(plans)) if not ctx.eb_available[t]
     )
+    # Whether there is surplus at 2 pm depends on every hour since the
+    # morning: a battery the median forecast fills by noon may not fill at
+    # all on a cloudy day. So a seller sizes a firm sale on the whole path,
+    # walking its battery as if the forecast came in at its commitment
+    # quantile all session (sun at q, load at 1 - q) — not on the median
+    # path plus one hour's error.
+    sell_path = project(
+        battery,
+        [
+            _at_quantile(f.generation_p10, f.generation_p50, f.generation_p90, sell_q)
+            - _at_quantile(f.consumption_p10, f.consumption_p50, f.consumption_p90, 1 - sell_q)
+            - committed
+            for f, committed in zip(ctx.forecast, obs.committed_kwh, strict=True)
+        ],
+        floor_kwh=list(state["floors"]),
+    )
     return {
+        "sell_path_plans": sell_path,
         "sigma_kwh": sigma,
         "expected_price": expected,
         "sell_quantile": sell_q,
@@ -224,7 +267,7 @@ def _order(state: _State) -> _State:
 
     if plan.spill_kwh > _MIN_ORDER_KWH:
         risk = state["sell_quantile"]
-        kwh = max(0.0, plan.spill_kwh + _z(risk) * sigma)
+        kwh = state["sell_path_plans"][s].spill_kwh
         if kwh > _MIN_ORDER_KWH:
             orders = (
                 ask(

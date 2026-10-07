@@ -109,7 +109,7 @@ def test_a_feasible_allocation_needs_no_curtailment(trades: list[Trade]) -> None
     already_feasible = all(
         abs(flow_before.line_flow_kw[line.id]) <= line.thermal_limit_kw for line in _NETWORK.lines
     ) and all(
-        _NETWORK.voltage_min_pu <= v <= _NETWORK.voltage_max_pu
+        _NETWORK.operating_min_pu <= v <= _NETWORK.operating_max_pu
         for v in flow_before.bus_voltage_pu.values()
     )
 

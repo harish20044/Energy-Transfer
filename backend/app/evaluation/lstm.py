@@ -104,7 +104,7 @@ def train(inputs: SequenceInputs) -> tuple[QuantileLSTM, list[float]]:
             loss = pinball(model(sequence[batch], static[batch]), target[batch])
             loss.backward()  # type: ignore[no-untyped-call]
             optimiser.step()
-            total += float(loss) * len(batch)
+            total += loss.item() * len(batch)
         losses.append(total / len(order))
         print(f"  epoch {epoch + 1}/{EPOCHS}: pinball {losses[-1]:.4f}", flush=True)  # noqa: T201
     return model, losses

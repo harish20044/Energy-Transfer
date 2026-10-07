@@ -91,9 +91,11 @@ def render_markdown(results: dict[str, Any]) -> str:
         f"{_pct(o5['scr']['eb_only'])} → {_pct(o5['scr']['with_p2p'])} | {_met(o5['met'])} |"
     )
     add(
-        "| **O6** Economic benefit | Mean bill reduction ≥ 10% (band 10–20%); no household "
+        "| **O6** Economic benefit | Bill reduction ≥ 10% (band 10–20%), bill-weighted over "
+        "net buyers; no household "
         "worse off than EB-only | "
-        f"{_pct(o6['mean_bill_reduction_net_consumers'])} mean reduction · "
+        f"{_pct(o6['mean_bill_reduction_net_consumers'])} bill-weighted reduction "
+        f"(median {_pct(o6['median_bill_reduction_net_consumers'])}) · "
         f"{o6['worse_off']} of {o6['household_sessions']} household-sessions worse off "
         f"(worst {_inr(o6['worst_saving_inr'])}) | {_met(o6['met'])} |"
     )
@@ -291,8 +293,10 @@ def render_markdown(results: dict[str, Any]) -> str:
     )
     add(
         f"- Bill reduction is averaged over the {o6['net_consumer_household_sessions']} "
-        "household-sessions that are net buyers on an EB-only bill (a percentage of a negative "
-        "bill means nothing); net sellers' gains are in the community saving of "
+        "household-sessions that are net buyers on an EB-only bill, weighted by that bill — total "
+        "saving over total bill, since a plain mean of percentages is ruled by near-zero bills "
+        "(and a percentage of a negative bill means nothing). Net sellers' gains are in the "
+        "community saving of "
         f"{_inr(o6['community_saving_inr'])} over the suite."
     )
     add("")

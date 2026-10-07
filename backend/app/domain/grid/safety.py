@@ -61,11 +61,11 @@ def _worst_thermal_violation(
 def _worst_voltage_violation(
     network: Network, flow: distflow.FlowResult
 ) -> tuple[str, float] | None:
-    """The bus furthest outside the statutory voltage band, as
-    (bus, excess_pu)."""
+    """The bus furthest outside the operating voltage band (the statutory
+    band less the linearisation margin), as (bus, excess_pu)."""
     worst: tuple[str, float] | None = None
     for bus, voltage in flow.bus_voltage_pu.items():
-        excess_pu = max(0.0, voltage - network.voltage_max_pu, network.voltage_min_pu - voltage)
+        excess_pu = max(0.0, voltage - network.operating_max_pu, network.operating_min_pu - voltage)
         if excess_pu > _QUANTITY_EPSILON and (worst is None or excess_pu > worst[1]):
             worst = (bus, excess_pu)
     return worst
@@ -203,7 +203,7 @@ def enforce(network: Network, trades: tuple[Trade, ...]) -> SafetyResult:
             # seller responsible for that import may be a household on a
             # completely different lateral, so it is the buyers in this
             # subtree that must be curtailed, not the sellers.
-            side = "seller" if flow.bus_voltage_pu[bus] > network.voltage_max_pu else "buyer"
+            side = "seller" if flow.bus_voltage_pu[bus] > network.operating_max_pu else "buyer"
             household_of: Callable[[Trade], str] = (
                 (lambda t: t.seller_household_id)
                 if side == "seller"

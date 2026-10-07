@@ -117,6 +117,9 @@ services:
       target: benchmark
     image: energy-transfer-bench
     profiles: [bench]
+    # A one-off job, not the API: the image's HTTP health check doesn't apply.
+    healthcheck:
+      disable: true
     env_file: [.env]
     volumes:
       - ./backend/app:/app/app

@@ -37,6 +37,20 @@ class Network:
     lines: tuple[Line, ...]
     voltage_min_pu: float = 0.95
     voltage_max_pu: float = 1.05
+    # The linearised check keeps this far inside the statutory band. Full AC
+    # power flow (app/evaluation/ac_check.py) puts bus voltages up to
+    # 0.013 pu beyond the linear estimate on a heavily loaded 100-home
+    # feeder, so a check curtailing exactly to the limit lets real
+    # violations through.
+    voltage_margin_pu: float = 0.015
+
+    @property
+    def operating_min_pu(self) -> float:
+        return self.voltage_min_pu + self.voltage_margin_pu
+
+    @property
+    def operating_max_pu(self) -> float:
+        return self.voltage_max_pu - self.voltage_margin_pu
 
     def buses(self) -> frozenset[str]:
         return _topology(self).buses

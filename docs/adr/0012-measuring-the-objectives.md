@@ -83,6 +83,31 @@ outcome.
 `python -m app.evaluation` writes `docs/evaluation.md` and `docs/evaluation.json`. A missed target is
 reported as found.
 
+**Two forecaster changes the measurement led to**, both tuned on the calibration days and never on the
+test days:
+
+- **Asymmetric conformal calibration.** Each tail is now calibrated on its own. Before, solar's P10–P90
+  band covered about 80% of actuals, but 14.9% fell below P10 against a nominal 10%.
+- **1,500 boosting rounds instead of 300.** The load P50's error against same-hour-yesterday kept falling:
+  24.8% better at 300 rounds, 29.4% at 1,500.
+
+**Changes to the system the measurement led to:**
+
+- **Grid voltage margin.** The full AC check found 22 voltage violations on the 100-home feeder that the
+  linear check had passed: curtailing to exactly 0.950 pu by the linear estimate left buses at 0.939 pu.
+  The safety layer now keeps 0.015 pu inside the statutory band, just over the worst measured
+  linear-vs-AC gap of 0.013 pu. The violations went to zero.
+- **Firm sales sized on the whole path.** On a cloudy day the median forecast filled a battery by noon that
+  never filled, and homes sold "surplus" they later bought back at retail. Sellers now walk the battery
+  with the forecast at their commitment quantile all session.
+- **No sun, no solar.** A home with no panels was forecast 0.000008 kW. Solar is now exactly zero
+  wherever clear-sky potential is zero.
+- **Rejected after measuring:** judging spare stored charge on the cautious (P10 sun, P90 load) view. It cut
+  the community's saving by about a third, so it was not kept.
+
+This supersedes the results table in [ADR-0010](0010-hourly-forecasts-with-conformal-calibration.md).
+The current figures are in [evaluation.md](../evaluation.md).
+
 ## Consequences
 
 **Good**

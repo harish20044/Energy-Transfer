@@ -4,10 +4,9 @@ The Zeroth Review stated directional outcomes ("accurate forecasting", "efficien
 cannot be passed or failed. This document turns each into something falsifiable, with a formula, a
 baseline and a target.
 
-Every number is meant to come from an evaluation harness (`scripts/evaluate.py`) run over seeded
-sessions, so the table regenerates identically on any machine. **That harness is not built yet.** Today
-the forecaster's held-out metrics (O1) and per-session statements (O6) exist; the rest are measured by
-hand or not at all.
+Every number comes from the evaluation harness, `python -m app.evaluation`
+([ADR-0012](adr/0012-measuring-the-objectives.md)), run over a fixed suite of seeded sessions, so the table
+regenerates identically on any machine. **Measured results: [evaluation.md](evaluation.md).**
 
 ---
 

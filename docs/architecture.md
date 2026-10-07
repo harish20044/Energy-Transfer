@@ -191,17 +191,25 @@ at 10 homes × 24 hours the tables are plain and indexed. Hypertables are not us
 | EB power cut (a what-if) | No fallback during the cut. Agents charge up beforehand; unmet need is recorded as unserved, not hidden. |
 | Plan or next hour in the wrong state | 422 for an invalid plan, 409 for delivering a session that isn't planned. |
 
+## Measuring it
+
+`python -m app.evaluation` (`app/evaluation/`, [ADR-0012](adr/0012-measuring-the-objectives.md)) runs
+a fixed suite of seeded sessions in memory with the same `SessionMarket`, agents, forecaster and delivery
+code the app runs, and writes [evaluation.md](evaluation.md): the O1–O7 table against the targets in
+[objectives](objectives.md). Beside it:
+
+- a hindsight-optimal linear program for O2 (`optimum.py`);
+- a full AC power flow in pandapower for O4 (`ac_check.py`);
+- the PyTorch LSTM forecasting benchmark for O1 (`lstm.py`), in its own image:
+  `docker compose --profile bench run --rm bench`.
+
 ## Not built
 
-These appear in [objectives](objectives.md) or earlier records but do not exist in the code:
-
-- the evaluation harness (`scripts/evaluate.py`) that would produce the O1–O7 table;
-- the full AC power-flow check (pandapower) meant to confirm the linearised one;
-- the PyTorch LSTM forecasting benchmark ([ADR-0010](adr/0010-hourly-forecasts-with-conformal-calibration.md));
 - WebSocket streaming. The browser polls, and Redis runs in Compose but nothing uses it.
 
 ## Further reading
 
 - [Objectives](objectives.md): how O1–O7 are measured
+- [Evaluation](evaluation.md): the measured results
 - [Runbook](runbook.md): operating and troubleshooting
 - [ADRs](adr/): why the system looks the way it does

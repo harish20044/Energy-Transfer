@@ -28,8 +28,10 @@ paths from scratch on every check, which grows with the cube of the feeder's siz
 
 ## Consequences
 
-- Clearing a slot dropped to about 5 ms at 10 homes and about 70–180 ms at 100 homes. The exact figures are
-  in [evaluation.md](../evaluation.md).
+- Clearing a slot dropped from about 170 ms to tens of milliseconds at 10 homes, and from 3–4 s to a few
+  hundred milliseconds at 100. That is still above the 200 ms target at 100 homes: what remains is mostly
+  the grid safety layer's curtailment rounds on a heavily loaded feeder. The measured figures are in
+  [evaluation.md](../evaluation.md).
 - The agent is still a LangGraph state machine. The graph now carries the whole population through each
   step, rather than one household through all of them.
 - If agents ever needed different graphs, or tools with I/O, the batch would have to split by graph.

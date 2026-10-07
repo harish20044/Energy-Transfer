@@ -241,7 +241,7 @@ def summarise(
         return used / gen if gen > 0 else 0.0
 
     bills = [b for s in sessions for b in s["household_bills"]]
-    consumers = [b["reduction"] for b in bills if b["reduction"] is not None]
+    consumers = [b for b in bills if b["reduction"] is not None]
     worse_off = [b for b in bills if b["saving_inr"] < -_IR_TOLERANCE_INR]
 
     trades = sum(s["trades"] for s in sessions) + scale["trades"]
@@ -254,7 +254,14 @@ def summarise(
     o5_ssr = (pooled("eb_only", "ssr"), pooled("actual", "ssr"))
     o5_scr = (pooled("eb_only", "scr"), pooled("actual", "scr"))
     export_reduction = 1.0 - export_actual / export_alone if export_alone > 0 else 0.0
-    mean_reduction = float(np.mean(consumers)) if consumers else 0.0
+    # Bill-weighted: total saving over total EB-only bill, across net buyers.
+    # A plain mean of percentages is ruled by near-zero bills (losing ₹0.68
+    # of a ₹0.50 bill would count as -136%).
+    consumer_bills = sum(b["bill_eb_only_inr"] for b in consumers)
+    mean_reduction = (
+        sum(b["saving_inr"] for b in consumers) / consumer_bills if consumer_bills > 0 else 0.0
+    )
+    median_reduction = float(np.median([b["reduction"] for b in consumers])) if consumers else 0.0
     p95_scale = float(np.percentile(scale_latency, 95)) if len(scale_latency) else 0.0
 
     return {
@@ -296,6 +303,7 @@ def summarise(
         },
         "O6": {
             "mean_bill_reduction_net_consumers": mean_reduction,
+            "median_bill_reduction_net_consumers": median_reduction,
             "net_consumer_household_sessions": len(consumers),
             "household_sessions": len(bills),
             "worse_off": len(worse_off),

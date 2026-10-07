@@ -139,3 +139,12 @@ def test_every_forecaster_is_scored_the_same_way(frame: pd.DataFrame, trained: t
             assert metrics["below_p10"] <= metrics["below_p90"]
     # The baseline uses one value for all three quantiles: no band at all.
     assert naive["consumption_kw"]["p10_p90_coverage"] < 0.1
+
+
+def test_no_sun_on_the_panels_means_exactly_no_solar(frame: pd.DataFrame, trained: tuple) -> None:
+    """Night, or a home with no panels: zero solar by physics, not left to a model."""
+    _, models = trained
+    dark = frame.assign(clear_sky_pv_kw=0.0)
+    batch = predict_batch(models, dark, fit_conformal_offsets(models, frame))
+    for quantile in batch["generation_kw"].values():
+        assert (quantile == 0.0).all()

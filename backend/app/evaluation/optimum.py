@@ -200,9 +200,10 @@ def solve_optimum(run: SessionRun) -> Optimum:
             for line in network.path_from_substation(bus):
                 for col, coeff in flows[line.id].items():
                     drop[col] = drop.get(col, 0.0) + line.resistance_pu * coeff
-            # V <= vmax  ->  -drop <= vmax - 1 ;  V >= vmin  ->  drop <= 1 - vmin
-            le({k: -v for k, v in drop.items()}, network.voltage_max_pu - 1.0)
-            le(drop, 1.0 - network.voltage_min_pu)
+            # Within the safety layer's operating band:
+            # V <= vmax -> -drop <= vmax - 1;  V >= vmin -> drop <= 1 - vmin
+            le({k: -v for k, v in drop.items()}, network.operating_max_pu - 1.0)
+            le(drop, 1.0 - network.operating_min_pu)
 
     a_eq = coo_matrix((eq_vals, (eq_rows, eq_cols)), shape=(len(eq_rhs), size)).tocsr()
     a_ub = coo_matrix((ub_vals, (ub_rows, ub_cols)), shape=(len(ub_rhs), size)).tocsr()
