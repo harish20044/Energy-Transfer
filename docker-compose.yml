@@ -90,6 +90,8 @@ services:
       - ./backend/tests:/app/tests
       - ./backend/alembic:/app/alembic
       - ./backend/alembic.ini:/app/alembic.ini
+      # The evaluation harness writes its report here (python -m app.evaluation).
+      - ./docs:/app/docs
       - backend_venv:/app/.venv
     depends_on:
       postgres: {condition: service_healthy}
@@ -103,6 +105,22 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    networks: [energy]
+
+  # ---------------------------------------------------------------------------
+  # LSTM forecasting benchmark — offline, opt-in, never part of the app:
+  #   docker compose --profile bench run --rm bench
+  # ---------------------------------------------------------------------------
+  bench:
+    build:
+      context: ./backend
+      target: benchmark
+    image: energy-transfer-bench
+    profiles: [bench]
+    env_file: [.env]
+    volumes:
+      - ./backend/app:/app/app
+      - ./docs:/app/docs
     networks: [energy]
 
   # ---------------------------------------------------------------------------

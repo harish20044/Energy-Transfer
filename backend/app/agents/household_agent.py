@@ -1,7 +1,15 @@
-"""One household's trading agent: a LangGraph decision graph run for every
-hourly slot of a planning session, in time order, after its forecast is in.
+"""The households' trading agents: a LangGraph decision graph run for every
+hourly slot of a planning session, in time order, after the forecasts are in.
 
     perceive -> project -> value -> order -> speak
+
+One run per slot takes every household's agent through these steps together
+(`decide_slots`): each step is applied to each agent on its own, and an
+agent only ever sees its own observation — its forecast, battery, contracts
+and learned prices — so every household still decides for itself. Running
+them as one graph rather than one graph per household pays LangGraph's
+per-run overhead once per slot instead of once per household, which is what
+keeps a slot's clearing fast as the feeder grows (objective O3).
 
 - **perceive**: the slot, its tariffs and whether the EB is up, and every
   neighbour contract the agent has already made for earlier slots.
@@ -37,6 +45,7 @@ market clamps every price into the tariff band.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from functools import lru_cache
 from itertools import pairwise
@@ -295,23 +304,51 @@ def _speak(state: _State) -> _State:
     }
 
 
+class _Agents(TypedDict):
+    """The graph's state: every household agent's own state, in order."""
+
+    agents: list[_State]
+
+
+def _for_each_agent(step: Callable[[_State], _State]) -> Any:  # a LangGraph node
+    """A graph node applying one decision step to every agent, each on its
+    own state alone."""
+
+    def node(state: _Agents) -> _Agents:
+        return {"agents": [{**agent, **step(agent)} for agent in state["agents"]]}
+
+    return node
+
+
+_STEPS: dict[str, Callable[[_State], _State]] = {
+    "perceive": _perceive,
+    "project": _project,
+    "value": _value,
+    "order": _order,
+    "speak": _speak,
+}
+
+
 @lru_cache(maxsize=1)
 def compiled_graph() -> Any:  # LangGraph's CompiledStateGraph is generic over untyped internals
-    builder = StateGraph(_State)
-    builder.add_node("perceive", _perceive)
-    builder.add_node("project", _project)
-    builder.add_node("value", _value)
-    builder.add_node("order", _order)
-    builder.add_node("speak", _speak)
-    builder.add_edge(START, "perceive")
+    builder = StateGraph(_Agents)
+    for name in GRAPH_NODES:
+        builder.add_node(name, _for_each_agent(_STEPS[name]))
+    builder.add_edge(START, GRAPH_NODES[0])
     for upstream, downstream in pairwise(GRAPH_NODES):
         builder.add_edge(upstream, downstream)
-    builder.add_edge("speak", END)
+    builder.add_edge(GRAPH_NODES[-1], END)
     return builder.compile()
 
 
+def decide_slots(observations: Sequence[SlotObservation]) -> list[SlotDecision]:
+    """Every household's agent decides this slot, in the order given."""
+    if not observations:
+        return []
+    result = compiled_graph().invoke({"agents": [{"obs": obs} for obs in observations]})
+    return [agent["decision"] for agent in result["agents"]]
+
+
 def decide_slot(observation: SlotObservation) -> SlotDecision:
-    """Run this household's agent for one slot of the session."""
-    result = compiled_graph().invoke({"obs": observation})
-    decision: SlotDecision = result["decision"]
-    return decision
+    """One household's agent decides one slot of the session."""
+    return decide_slots([observation])[0]

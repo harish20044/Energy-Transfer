@@ -49,6 +49,11 @@ grid = [
     "numpy>=2.1",
     "pandapower>=2.14",
 ]
+# Offline benchmark only (ADR-0004): the LSTM forecaster comparison. Never in
+# the app's image — `docker compose --profile bench run --rm bench ...`.
+bench = [
+    "torch>=2.4",
+]
 # P4 — agents and LLM providers. Groq, Ollama and the stub are all reached
 # through their OpenAI-compatible HTTP APIs with httpx, so no vendor SDK.
 agents = [
@@ -112,6 +117,8 @@ ignore = [
 "tests/**/*.py" = ["S101", "ANN201", "ANN001", "ARG001", "S105", "S106"]
 # User-facing agent messages use real typography: an en dash in "2–3 pm".
 "app/agents/speech.py" = ["RUF001"]
+# The evaluation report is written for people: real dashes and minus signs.
+"app/evaluation/report.py" = ["RUF001"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["app"]
@@ -134,8 +141,15 @@ plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
 # Third-party packages that ship no type information.
-module = ["pandapower.*", "lightgbm.*", "langgraph.*", "pandas.*"]
+module = ["pandapower.*", "lightgbm.*", "langgraph.*", "pandas.*", "torch.*", "scipy.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# The LSTM benchmark needs the optional `bench` extra (PyTorch). Where torch
+# isn't installed (CI, the app image) its types are Any.
+module = ["app.evaluation.lstm"]
+disallow_subclassing_any = false
+warn_unused_ignores = false
 
 [tool.pydantic-mypy]
 init_typed = true
@@ -170,7 +184,12 @@ markers = [
 [tool.coverage.run]
 branch = true
 source = ["app"]
-omit = ["app/__main__.py"]
+omit = [
+    "app/__main__.py",
+    # Needs the optional `bench` extra (PyTorch) and runs only in the benchmark
+    # image; its inputs (app/evaluation/sequences.py) are tested.
+    "app/evaluation/lstm.py",
+]
 # SQLAlchemy's async engine bridges sync DBAPI calls through greenlet; without
 # this, coverage.py cannot see into that greenlet and silently under-reports
 # every line that runs after an `await db.execute(...)`/`db.flush()` — i.e.

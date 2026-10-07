@@ -16,6 +16,8 @@ Why the stack looks the way it does. Each record states the context, the decisio
 | [0009](0009-newsvendor-agents-in-the-calibrated-band.md) | Agents commit as newsvendors, inside the forecast's calibrated band | Accepted |
 | [0010](0010-hourly-forecasts-with-conformal-calibration.md) | Hourly forecasts 1–24 hours ahead, with conformally calibrated quantiles (refines 0004) | Accepted |
 | [0011](0011-groq-advisor-as-a-tool-loop.md) | The household advisor: a tool-using LLM on Groq, beside the trading path (refines 0005) | Accepted |
+| [0012](0012-measuring-the-objectives.md) | Measuring the objectives: an in-memory harness, a hindsight optimum and an AC check | Accepted |
+| [0013](0013-one-graph-run-per-slot.md) | One decision-graph run per slot for every agent (refines 0009) | Accepted |
 
 Records 0002–0005 each supersede or refine a row of the Zeroth Review tech stack. They exist so that the
 departures can be defended with the trade-off that was actually weighed, rather than recalled from memory.

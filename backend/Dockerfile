@@ -33,7 +33,7 @@ FROM base AS development
 # that editing source does not invalidate the (slow) dependency install layer.
 COPY pyproject.toml README.md ./
 RUN mkdir -p app && touch app/__init__.py \
-    && pip install -e ".[dev,db,auth,ml,agents]"
+    && pip install -e ".[dev,db,auth,ml,agents,grid]"
 
 COPY app ./app
 COPY tests ./tests
@@ -46,6 +46,18 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -fsS http://localhost:8000/api/v1/health/live || exit 1
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+# =============================================================================
+FROM development AS benchmark
+# =============================================================================
+
+# The LSTM forecasting benchmark (app.evaluation.lstm) — offline only, never
+# served. PyPI's Linux torch wheel brings its CUDA runtime with it (~3 GB);
+# it runs fine on CPU, and keeping it in this separate image keeps the app's
+# image small.
+RUN pip install -e ".[dev,db,auth,ml,agents,grid,bench]"
+
+CMD ["python", "-m", "app.evaluation.lstm"]
 
 # =============================================================================
 FROM base AS production

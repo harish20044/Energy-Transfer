@@ -79,7 +79,15 @@ def generate_training_rows(
     start: date,
     num_days: int,
     seed: int,
+    history_hours: int = 0,
 ) -> list[dict[str, float]]:
+    """`history_hours` > 0 adds the household's metered load and solar for
+    that many hours before each forecast origin (`hist_consumption_1` is
+    the hour just before it), for sequence models; the LightGBM features
+    never read them."""
+    if not 0 <= history_hours <= TODAY_OFFSET:
+        msg = f"history_hours must be 0-{TODAY_OFFSET}, got {history_hours}"
+        raise ValueError(msg)
     rows: list[dict[str, float]] = []
     for offset in range(num_days):
         day = start + timedelta(days=offset)
@@ -112,5 +120,12 @@ def generate_training_rows(
                     row["consumption_kw"] = float(window.consumption_kw[target])
                     row["generation_kw"] = float(window.generation_kw[target])
                     row["day_of_year"] = float(day.timetuple().tm_yday)
+                    for back in range(1, history_hours + 1):
+                        row[f"hist_consumption_{back}"] = float(
+                            window.consumption_kw[now_index - back]
+                        )
+                        row[f"hist_generation_{back}"] = float(
+                            window.generation_kw[now_index - back]
+                        )
                     rows.append(row)
     return rows

@@ -37,7 +37,7 @@ from app.scripts.seed_households import HOUSEHOLDS
 TRAINING_YEAR_START = date(2025, 1, 1)
 NUM_DAYS = 365
 SEED = 42
-_SPLIT_MODULUS = 5
+SPLIT_MODULUS = 5
 
 
 def _print_report(title: str, report: dict[str, dict[str, float]]) -> None:
@@ -59,7 +59,7 @@ def main() -> None:
     )
     print(f"Generated {len(df):,} rows in {time.monotonic() - start:.1f}s")  # noqa: T201
 
-    split = df["day_of_year"].astype(int) % _SPLIT_MODULUS
+    split = df["day_of_year"].astype(int) % SPLIT_MODULUS
     fit_df, calibration_df, test_df = df[split >= 2], df[split == 1], df[split == 0]
 
     start = time.monotonic()

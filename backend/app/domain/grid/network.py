@@ -10,7 +10,8 @@ dashboard actually displays.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from functools import lru_cache
 
 SUBSTATION_BUS = "substation"
 
@@ -38,48 +39,81 @@ class Network:
     voltage_max_pu: float = 1.05
 
     def buses(self) -> frozenset[str]:
-        buses = {SUBSTATION_BUS}
-        for line in self.lines:
-            buses.add(line.from_bus)
-            buses.add(line.to_bus)
-        return frozenset(buses)
+        return _topology(self).buses
 
     def household_buses(self) -> frozenset[str]:
-        return self.buses() - {SUBSTATION_BUS}
+        return _topology(self).buses - {SUBSTATION_BUS}
 
     def line_to(self, bus: str) -> Line:
         """The single line feeding `bus` from its parent — exists exactly
         once per non-substation bus in a well-formed tree."""
-        matches = [line for line in self.lines if line.to_bus == bus]
+        matches = _topology(self).incoming.get(bus, ())
         if len(matches) != 1:
             msg = f"expected exactly one incoming line to {bus!r}, found {len(matches)}"
             raise ValueError(msg)
         return matches[0]
 
     def children_of(self, bus: str) -> tuple[str, ...]:
-        return tuple(line.to_bus for line in self.lines if line.from_bus == bus)
+        return _topology(self).children.get(bus, ())
 
     def subtree(self, bus: str) -> frozenset[str]:
         """`bus` and every household downstream of it."""
-        result = {bus}
-        frontier = [bus]
-        while frontier:
-            current = frontier.pop()
-            for child in self.children_of(current):
-                if child not in result:
-                    result.add(child)
-                    frontier.append(child)
-        return frozenset(result)
+        cache = _topology(self).subtrees
+        if bus not in cache:
+            result = {bus}
+            frontier = [bus]
+            while frontier:
+                current = frontier.pop()
+                for child in self.children_of(current):
+                    if child not in result:
+                        result.add(child)
+                        frontier.append(child)
+            cache[bus] = frozenset(result)
+        return cache[bus]
 
     def path_from_substation(self, bus: str) -> tuple[Line, ...]:
         """Every line from the substation down to `bus`, in order."""
-        chain: list[Line] = []
-        current = bus
-        while current != SUBSTATION_BUS:
-            line = self.line_to(current)
-            chain.append(line)
-            current = line.from_bus
-        return tuple(reversed(chain))
+        cache = _topology(self).paths
+        if bus not in cache:
+            chain: list[Line] = []
+            current = bus
+            while current != SUBSTATION_BUS:
+                line = self.line_to(current)
+                chain.append(line)
+                current = line.from_bus
+            cache[bus] = tuple(reversed(chain))
+        return cache[bus]
+
+
+@dataclass(frozen=True, slots=True)
+class _Topology:
+    """A feeder's shape, worked out once: the grid safety layer asks for the
+    same subtrees and paths on every check of every slot, and recomputing
+    them each time grows with the cube of the feeder's size."""
+
+    buses: frozenset[str]
+    incoming: dict[str, tuple[Line, ...]]
+    children: dict[str, tuple[str, ...]]
+    # Filled on first use, so a malformed tree still fails where it always did.
+    subtrees: dict[str, frozenset[str]] = field(default_factory=dict)
+    paths: dict[str, tuple[Line, ...]] = field(default_factory=dict)
+
+
+@lru_cache(maxsize=64)
+def _topology(network: Network) -> _Topology:
+    buses = {SUBSTATION_BUS}
+    incoming: dict[str, list[Line]] = {}
+    children: dict[str, list[str]] = {}
+    for line in network.lines:
+        buses.add(line.from_bus)
+        buses.add(line.to_bus)
+        incoming.setdefault(line.to_bus, []).append(line)
+        children.setdefault(line.from_bus, []).append(line.to_bus)
+    return _Topology(
+        buses=frozenset(buses),
+        incoming={bus: tuple(lines) for bus, lines in incoming.items()},
+        children={bus: tuple(kids) for bus, kids in children.items()},
+    )
 
 
 def default_feeder(household_ids: list[str]) -> Network:

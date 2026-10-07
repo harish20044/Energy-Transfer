@@ -18,10 +18,13 @@ from app.forecasting.model import (
     fit_conformal_offsets,
     load_conformal,
     load_models,
+    nmae,
     pinball_loss,
     predict_batch,
     predict_quantiles,
     save_conformal,
+    score_quantiles,
+    seasonal_naive_predictions,
     train_models,
 )
 
@@ -102,3 +105,37 @@ def test_pinball_loss_penalises_under_prediction_more_at_high_quantiles() -> Non
     y = np.array([2.0])
     low = np.array([1.0])
     assert pinball_loss(y, low, alpha=0.9) > pinball_loss(y, low, alpha=0.1)
+
+
+def test_each_tail_is_calibrated_on_its_own(frame: pd.DataFrame, trained: tuple) -> None:
+    """Asymmetric CQR: about 10% of outcomes below P10 and 10% above P90 —
+    not merely 80% in between with every miss on one side."""
+    _, models = trained
+    calibrated = evaluate(models, frame, fit_conformal_offsets(models, frame))
+    for metrics in calibrated.values():
+        assert metrics["below_p10"] == pytest.approx(0.10, abs=0.03)
+        assert metrics["below_p90"] == pytest.approx(0.90, abs=0.03)
+
+
+def test_an_older_symmetric_conformal_file_still_loads(tmp_path: Path) -> None:
+    (tmp_path / "conformal.json").write_text('{"consumption_kw": {"1": 0.25}}')
+    assert load_conformal(artifacts_dir=tmp_path) == {"consumption_kw": {1: (0.25, 0.25)}}
+
+
+def test_nmae_is_relative_to_the_mean_actual() -> None:
+    y = np.array([1.0, 3.0])
+    assert nmae(y, np.array([2.0, 2.0])) == pytest.approx(0.5)
+    assert nmae(np.zeros(2), np.ones(2)) == 0.0
+
+
+def test_every_forecaster_is_scored_the_same_way(frame: pd.DataFrame, trained: tuple) -> None:
+    _, models = trained
+    model = score_quantiles(frame, predict_batch(models, frame))
+    naive = score_quantiles(frame, seasonal_naive_predictions(frame))
+    assert set(model) == set(naive) == {"consumption_kw", "generation_kw"}
+    for scores in (model, naive):
+        for metrics in scores.values():
+            assert set(metrics) >= {"pinball", "nmae_p50", "p10_p90_coverage", "below_p10"}
+            assert metrics["below_p10"] <= metrics["below_p90"]
+    # The baseline uses one value for all three quantiles: no band at all.
+    assert naive["consumption_kw"]["p10_p90_coverage"] < 0.1

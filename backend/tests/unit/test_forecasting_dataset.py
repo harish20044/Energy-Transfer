@@ -53,3 +53,29 @@ def test_family_what_ifs_appear_in_training() -> None:
     assert any(o.guests for o in overrides)
     assert any(o.away_from is not None for o in overrides)
     assert any(o.work_from_home for o in overrides)
+
+
+def test_history_columns_carry_the_hours_before_each_origin() -> None:
+    configs = (HouseholdConfig("h1", 4, 5.0),)
+    plain = generate_training_rows(configs, start=date(2025, 5, 1), num_days=1, seed=42)
+    with_history = generate_training_rows(
+        configs, start=date(2025, 5, 1), num_days=1, seed=42, history_hours=3
+    )
+    assert len(plain) == len(with_history)
+    row = with_history[0]
+    assert {"hist_consumption_1", "hist_generation_3"} <= set(row)
+    # The hour just before the origin is the "last hour" feature LightGBM uses.
+    assert row["hist_consumption_1"] == row["lag_1h_consumption_kw"]
+    assert row["hist_consumption_2"] == row["lag_2h_consumption_kw"]
+    assert all(plain[0][k] == row[k] for k in plain[0])
+
+
+def test_history_is_limited_to_the_metered_window() -> None:
+    with pytest.raises(ValueError, match="history_hours"):
+        generate_training_rows(
+            (HouseholdConfig("h1", 4, 5.0),),
+            start=date(2025, 5, 1),
+            num_days=1,
+            seed=42,
+            history_hours=49,
+        )
