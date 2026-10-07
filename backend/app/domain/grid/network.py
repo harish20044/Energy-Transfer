@@ -27,7 +27,10 @@ class Line:
     thermal_limit_kw: float
 
 
-@dataclass(frozen=True, slots=True)
+# eq=False: a feeder is compared by identity. Built once per session, it is
+# never compared by value, and its derived topology is cached per feeder —
+# value hashing would re-hash every line on every lookup.
+@dataclass(frozen=True, slots=True, eq=False)
 class Network:
     """A radial feeder. `lines` must form a tree rooted at `SUBSTATION_BUS` —
     every bus reachable by exactly one path back to the substation, which is
