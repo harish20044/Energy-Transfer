@@ -271,3 +271,23 @@ def test_sequence_inputs_read_forward_in_time() -> None:
     assert inputs.static.shape == (2, len(FEATURE_COLUMNS))
     scaled = scale(inputs, fit_scaler(inputs))
     assert np.allclose(scaled.static, 0.0)  # constant features: centred, not divided by 0
+
+
+def test_the_least_possible_export_never_curtails_solar_while_the_eb_is_up() -> None:
+    """h1's 3 spare units: 2 cover h2, and with no battery the last one has
+    nowhere to go but the EB — throwing solar away is not allowed."""
+    floor = solve_optimum(_toy_run(), minimise_export=True)
+    assert floor.eb_export_kwh == pytest.approx(1.0, abs=1e-6)
+
+
+def test_the_auction_never_beats_the_best_matching_of_its_own_orders(
+    short_run: SessionRun,
+) -> None:
+    from app.evaluation.allocative import slot_welfare
+
+    welfare = [slot_welfare(cleared, short_run.network) for cleared in short_run.slots]
+    for w in welfare:
+        assert w.realised_inr <= w.optimal_inr + 1e-6
+    optimal = sum(w.optimal_inr for w in welfare)
+    assert optimal > 0
+    assert sum(w.realised_inr for w in welfare) / optimal > 0.9

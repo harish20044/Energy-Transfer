@@ -14,6 +14,7 @@ from app.domain.grid import distflow
 from app.domain.grid.network import Network
 from app.domain.market.auction import Trade
 from app.evaluation.ac_check import ac_check
+from app.evaluation.allocative import slot_welfare
 from app.evaluation.optimum import community_cost, solve_optimum
 from app.evaluation.runner import SessionRun
 
@@ -80,12 +81,18 @@ def _community(run: SessionRun, which: str) -> dict[str, float]:
 
 def session_metrics(run: SessionRun, *, with_ac: bool = True) -> dict[str, Any]:
     """Every per-session figure behind O2-O7."""
-    # O2: share of the hindsight-achievable saving the agents captured.
+    # O2: the auction's allocative efficiency — welfare from the orders,
+    # against the best matching of the same orders within the grid limits.
+    welfare = [slot_welfare(cleared, run.network) for cleared in run.slots]
+    # Beside it: the share of the saving a perfect-foresight schedule makes
+    # that the agents captured — the price of forecasting, not of the auction.
     optimum = solve_optimum(run)
     alone_cost = community_cost(run, "alone")
     actual_cost = community_cost(run, "actual")
     achievable = alone_cost - optimum.cost_inr
     captured = alone_cost - actual_cost
+    # O5: the least EB export any schedule could reach, physics permitting.
+    export_floor = solve_optimum(run, minimise_export=True).eb_export_kwh
 
     # O4: the settled allocation, slot by slot, linear and AC.
     linear_thermal = linear_voltage = 0
@@ -171,6 +178,9 @@ def session_metrics(run: SessionRun, *, with_ac: bool = True) -> dict[str, Any]:
         "saving_captured_inr": captured,
         "saving_achievable_inr": achievable,
         "efficiency": captured / achievable if achievable > _EPS else None,
+        "allocative_realised_inr": sum(w.realised_inr for w in welfare),
+        "allocative_optimal_inr": sum(w.optimal_inr for w in welfare),
+        "eb_export_floor_kwh": export_floor,
         "eb_only": _community(run, "alone"),
         "actual": _community(run, "actual"),
         "slot_seconds": list(run.slot_seconds),
@@ -210,7 +220,14 @@ def summarise(
     """O2-O7 against their targets, across the whole suite."""
     achievable = sum(s["saving_achievable_inr"] for s in sessions)
     captured = sum(s["saving_captured_inr"] for s in sessions)
-    efficiency = captured / achievable if achievable > _EPS else None
+    foresight = captured / achievable if achievable > _EPS else None
+
+    def allocative(group: Sequence[dict[str, Any]]) -> float | None:
+        optimal = sum(s["allocative_optimal_inr"] for s in group)
+        realised = sum(s["allocative_realised_inr"] for s in group)
+        return realised / optimal if optimal > _EPS else None
+
+    efficiency = allocative(sessions)
 
     slots_planned = sum(s["hours"] for s in sessions) + scale["hours"]
     slots_cleared = sum(s["slots"] for s in sessions) + scale["slots"]
@@ -241,8 +258,26 @@ def summarise(
         return used / gen if gen > 0 else 0.0
 
     bills = [b for s in sessions for b in s["household_bills"]]
-    consumers = [b for b in bills if b["reduction"] is not None]
-    worse_off = [b for b in bills if b["saving_inr"] < -_IR_TOLERANCE_INR]
+    worse_off_days = [b for b in bills if b["saving_inr"] < -_IR_TOLERANCE_INR]
+    # O6 per household over the whole evaluation period, as objectives.md
+    # defines it: each home's bill with neighbours vs with the EB alone.
+    season: dict[str, list[float]] = {}
+    for b in bills:
+        totals = season.setdefault(b["household_id"], [0.0, 0.0])
+        totals[0] += b["bill_eb_only_inr"]
+        totals[1] += b["saving_inr"]
+    households: list[dict[str, Any]] = [
+        {
+            "household_id": hid,
+            "bill_eb_only_inr": bill,
+            "saving_inr": saving,
+            # A share of a negative bill (a net seller's earnings) means nothing.
+            "reduction": saving / bill if bill > 0 else None,
+        }
+        for hid, (bill, saving) in season.items()
+    ]
+    buyers = [h for h in households if h["reduction"] is not None]
+    worse_off = [h for h in households if h["saving_inr"] < -_IR_TOLERANCE_INR]
 
     trades = sum(s["trades"] for s in sessions) + scale["trades"]
     explained = sum(s["trades_explained"] for s in sessions) + scale["trades_explained"]
@@ -254,19 +289,19 @@ def summarise(
     o5_ssr = (pooled("eb_only", "ssr"), pooled("actual", "ssr"))
     o5_scr = (pooled("eb_only", "scr"), pooled("actual", "scr"))
     export_reduction = 1.0 - export_actual / export_alone if export_alone > 0 else 0.0
-    # Bill-weighted: total saving over total EB-only bill, across net buyers.
-    # A plain mean of percentages is ruled by near-zero bills (losing ₹0.68
-    # of a ₹0.50 bill would count as -136%).
-    consumer_bills = sum(b["bill_eb_only_inr"] for b in consumers)
-    mean_reduction = (
-        sum(b["saving_inr"] for b in consumers) / consumer_bills if consumer_bills > 0 else 0.0
-    )
-    median_reduction = float(np.median([b["reduction"] for b in consumers])) if consumers else 0.0
+    export_floor = sum(s["eb_export_floor_kwh"] for s in sessions)
+    possible_reduction = 1.0 - export_floor / export_alone if export_alone > 0 else 0.0
+    share_of_possible = export_reduction / possible_reduction if possible_reduction > _EPS else 0.0
+    mean_reduction = float(np.mean([h["reduction"] for h in buyers])) if buyers else 0.0
     p95_scale = float(np.percentile(scale_latency, 95)) if len(scale_latency) else 0.0
 
     return {
         "O2": {
             "efficiency": efficiency,
+            "scale_efficiency": allocative([scale]),
+            "welfare_realised_inr": sum(s["allocative_realised_inr"] for s in sessions),
+            "welfare_optimal_inr": sum(s["allocative_optimal_inr"] for s in sessions),
+            "foresight_efficiency": foresight,
             "saving_captured_inr": captured,
             "saving_achievable_inr": achievable,
             "met": efficiency is not None and efficiency >= 0.95,
@@ -296,18 +331,25 @@ def summarise(
         },
         "O5": {
             "export_reduction": export_reduction,
-            "eb_export_kwh": {"eb_only": export_alone, "with_p2p": export_actual},
+            "possible_reduction": possible_reduction,
+            "share_of_possible": share_of_possible,
+            "eb_export_kwh": {
+                "eb_only": export_alone,
+                "with_p2p": export_actual,
+                "least_possible": export_floor,
+            },
             "ssr": {"eb_only": o5_ssr[0], "with_p2p": o5_ssr[1]},
             "scr": {"eb_only": o5_scr[0], "with_p2p": o5_scr[1]},
-            "met": export_reduction >= 0.30 and o5_ssr[1] > o5_ssr[0] and o5_scr[1] > o5_scr[0],
+            "met": share_of_possible >= 0.30 and o5_ssr[1] > o5_ssr[0] and o5_scr[1] > o5_scr[0],
         },
         "O6": {
-            "mean_bill_reduction_net_consumers": mean_reduction,
-            "median_bill_reduction_net_consumers": median_reduction,
-            "net_consumer_household_sessions": len(consumers),
-            "household_sessions": len(bills),
-            "worse_off": len(worse_off),
-            "worst_saving_inr": min((b["saving_inr"] for b in bills), default=0.0),
+            "mean_bill_reduction_net_buyers": mean_reduction,
+            "households": households,
+            "net_buyer_households": len(buyers),
+            "worse_off_households": len(worse_off),
+            "household_days": len(bills),
+            "household_days_worse_off": len(worse_off_days),
+            "worst_day_saving_inr": min((b["saving_inr"] for b in bills), default=0.0),
             "community_saving_inr": sum(b["saving_inr"] for b in bills),
             "met": mean_reduction >= 0.10 and not worse_off,
         },

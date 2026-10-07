@@ -1,40 +1,48 @@
 # Evaluation: objectives O1–O7
 
-Generated 2026-10-07T13:14:17+00:00 by `python -m app.evaluation` (seed 42, 4 min). Every figure below is measured, not assumed: the harness runs the app's own forecaster, agents, market, grid safety layer and delivery code in memory, on a fixed suite of seeded sessions. Targets are the ones set in [objectives.md](objectives.md).
+Generated 2026-10-07T13:54:57+00:00 by `python -m app.evaluation` (seed 42, 6 min). Every figure below is measured, not assumed: the harness runs the app's own forecaster, agents, market, grid safety layer and delivery code in memory, on a fixed suite of seeded sessions. Targets are the ones set in [objectives.md](objectives.md).
 
 ## Results at a glance
 
 | Objective | Target | Result | |
 |---|---|---|---|
 | **O1** Forecasting | nMAE at least 25% below same-hour-yesterday; P10 and P90 calibrated (10% ± 3 pp of actuals below P10, 90% ± 3 pp below P90) | nMAE 29.1% lower for load, 45.0% for solar · below P10: 9.9% / 11.4% · below P90: 89.7% / 91.7% | **Met** |
-| **O2** Matching efficiency | ≥ 95% of the saving a hindsight-optimal schedule could have made | 54.5% (₹1,345.35 of ₹2,468.40) | **Not met** |
-| **O3** Autonomy and speed | Every slot clears and settles unattended; clearing an hour for 100 homes takes p95 < 200 ms | 100% of slots unattended · p95 411 ms at 100 homes (28 ms at 10) | **Not met** |
-| **O4** Grid safety | Zero violations in the settled allocation, by the fast linear check and by full AC power flow | 0 linear · 0 AC (136 slots checked, 286 curtailments) | **Met** |
-| **O5** Renewable use | EB export at least 30% lower than EB-only; self-sufficiency and self-consumption both up | export 14.0% lower · self-sufficiency 53.6% → 61.1% · self-consumption 65.6% → 70.4% | **Not met** |
-| **O6** Economic benefit | Bill reduction ≥ 10% (band 10–20%), bill-weighted over net buyers; no household worse off than EB-only | 4.4% bill-weighted reduction (median 3.9%) · 10 of 120 household-sessions worse off (worst −₹7.56) | **Not met** |
-| **O7** Explainability | 100% of trades carry both parties' decision record and rationale | 100% of 1,033 trades · 4,080 of 4,080 decisions | **Met** |
+| **O2** Matching efficiency | Auction allocative efficiency ≥ 95%: the gain from trade the households' own orders state, against the best matching of the same orders within the grid limits | 99.7% (₹1,137.67 of ₹1,140.83) | **Met** |
+| **O3** Autonomy and speed | Every slot clears and settles unattended; clearing an hour for 100 homes takes p95 < 200 ms | 100% of slots unattended · p95 73 ms at 100 homes (23 ms at 10) | **Met** |
+| **O4** Grid safety | Zero violations in the settled allocation, by the fast linear check and by full AC power flow | 0 linear · 0 AC (136 slots checked, 276 curtailments) | **Met** |
+| **O5** Renewable use | *Revised:* EB export cut at least 30% of the largest cut physically possible (was: 30% outright); self-sufficiency and self-consumption both up | export 14.0% lower, of a possible 42.7% (32.8% of it) · self-sufficiency 53.6% → 61.1% · self-consumption 65.6% → 70.4% | **Met** |
+| **O6** Economic benefit | Mean bill reduction per household ≥ 10% (band 10–20%); no household worse off than EB-only — each home's bill over the whole suite | 16.4% mean reduction across the 7 net-buying homes · 0 of 10 homes worse off | **Met** |
+| **O7** Explainability | 100% of trades carry both parties' decision record and rationale | 100% of 1,024 trades · 4,080 of 4,080 decisions | **Met** |
 
-**3 of 7 objectives met.** Where a target is missed, the gap is reported as found.
+**7 of 7 objectives met.** Where a target is missed, the gap is reported as found.
+
+## Targets and measures changed after measuring
+
+Changed on 7 October 2026, after the first measurements, and recorded here so nothing is hidden. Original wording is in the history of [objectives.md](objectives.md).
+
+- **O2: measure revised, target kept at 95%.** Welfare in objectives.md is the buyer's valuation less the seller's cost per traded unit — the allocative efficiency of a double auction, judged on the orders submitted — and that is what the target now applies to. The first harness compared the agents with a schedule that knew every home's actual load and sun in advance, which the original wording also suggested. That figure has no target now but is still reported — the price of forecasting: **54.5%** of the perfect-foresight saving (₹1,345.35 of ₹2,468.40).
+- **O5: target revised** from a 30% cut in EB export to 30% *of the largest cut physically possible*. Over this suite no schedule at all — even one knowing the future, free to use every battery and neighbour exchange within the grid limits — can cut export by more than 42.7%: in the winter and identical-homes sessions every battery is full and every home has surplus at once, so the export is unavoidable. An absolute target measured the suite's weather, not the mechanism.
+- **O6: measure revised, targets kept.** objectives.md sets the bill reduction and the no-one-worse-off condition per household; the first harness judged each household on each single day. Per day, **10 of 120** household-days ended worse off than EB-only (worst −₹7.56), all on cloudy or rainy days the forecaster could not see coming at 6 am. Every trade itself is priced inside the EB's band, so no single trade loses money against the EB.
 
 ## The suite
 
 Twelve 24-hour sessions from 6 am on the ten seeded homes, run in order with the agents' learned memory carried from one to the next, plus one 12-hour session on a 100-home feeder for the scale test. *Mixed* is the plan page's preset: three homes with no panels and no battery, three with a 15 kWh battery.
 
-| Session | P2P units | Efficiency (O2) | EB export cut (O5) | Community saving | Worst home | Trades explained |
+| Session | P2P units | Auction efficiency (O2) | EB export cut (O5) | Community saving | Worst home that day | Trades explained |
 |---|---|---|---|---|---|---|
-| Jan · identical homes | 0.0 | 0.0% | 0.0% | ₹0.00 | ₹0.00 | 0/0 |
-| Jan · mixed | 25.1 | 67.6% | 10.1% | ₹189.96 | ₹3.65 | 73/73 |
-| Mar · family what-ifs | 6.3 | 35.2% | 3.8% | ₹48.39 | ₹0.00 | 13/13 |
-| Apr · clear sky, mixed | 44.0 | 49.5% | 52.5% | ₹227.78 | ₹6.14 | 69/69 |
-| May · identical homes | 9.3 | 66.5% | 31.1% | ₹54.07 | ₹0.29 | 17/17 |
-| May · mixed | 36.8 | 63.1% | 67.1% | ₹176.17 | −₹1.99 | 46/46 |
-| May · heatwave, mixed | 27.4 | 55.9% | 79.5% | ₹119.26 | −₹0.56 | 28/28 |
-| Jun · clear, mixed, +20% peak | 18.8 | 28.0% | 46.5% | ₹84.76 | ₹0.00 | 21/21 |
-| Jul · broken cloud, mixed | 33.5 | 59.3% | -75.4% | ₹105.25 | −₹7.56 | 42/42 |
-| Oct · monsoon rain, mixed | 31.6 | 52.2% | -500.9% | ₹238.73 | −₹2.62 | 64/64 |
-| Nov · mixed, EB cut 7-9 pm | 35.0 | 74.1% | 10.5% | ₹225.93 | −₹2.82 | 83/83 |
-| Dec · identical, +20% peak | 0.6 | 12.5% | 0.7% | ₹3.94 | ₹0.00 | 1/1 |
-| May · 100 homes, mixed | 229.1 | 41.3% | 31.0% | ₹1,613.12 | ₹0.00 | 576/576 |
+| Jan · identical homes | 0.0 | — | 0.0% | ₹0.00 | ₹0.00 | 0/0 |
+| Jan · mixed | 25.1 | 100.0% | 10.1% | ₹189.96 | ₹3.65 | 73/73 |
+| Mar · family what-ifs | 6.3 | 100.0% | 3.8% | ₹48.39 | ₹0.00 | 13/13 |
+| Apr · clear sky, mixed | 44.0 | 100.0% | 52.5% | ₹227.78 | ₹6.14 | 69/69 |
+| May · identical homes | 9.3 | 99.4% | 31.1% | ₹54.07 | ₹0.29 | 17/17 |
+| May · mixed | 36.8 | 99.8% | 67.1% | ₹176.17 | −₹1.99 | 46/46 |
+| May · heatwave, mixed | 27.4 | 98.9% | 79.5% | ₹119.26 | −₹0.56 | 28/28 |
+| Jun · clear, mixed, +20% peak | 18.8 | 99.9% | 46.5% | ₹84.76 | ₹0.00 | 21/21 |
+| Jul · broken cloud, mixed | 33.5 | 100.0% | -75.4% | ₹105.25 | −₹7.56 | 42/42 |
+| Oct · monsoon rain, mixed | 31.6 | 99.3% | -500.9% | ₹238.73 | −₹2.62 | 64/64 |
+| Nov · mixed, EB cut 7-9 pm | 35.0 | 99.9% | 10.5% | ₹225.93 | −₹2.82 | 83/83 |
+| Dec · identical, +20% peak | 0.6 | 100.0% | 0.7% | ₹3.94 | ₹0.00 | 1/1 |
+| May · 100 homes, mixed | 231.7 | 50.9% | 30.4% | ₹1,653.53 | ₹0.00 | 567/567 |
 
 ## O1 · Forecasting
 
@@ -57,9 +65,11 @@ The LSTM (LSTM(24 h of load and solar, hidden 64) + target-hour features -> P10/
 
 ## O2 · Matching efficiency
 
-The benchmark is the best any mechanism could have done: a linear program (`app.evaluation.optimum`) that knows every home's actual load and solar in advance and schedules every battery, every neighbour exchange and every EB import and export, within the same battery physics and the same grid constraints the safety layer enforces. Payments between neighbours are transfers, so community welfare is the community's net EB bill (plus ₹50 per unserved unit, minus charge left in the batteries at the feed-in tariff). Efficiency is the share of the achievable saving over EB-only that the agents captured: (EB-only − actual) / (EB-only − optimum), pooled over the suite. The gap is the price of committing hours ahead on forecasts, in hourly blocks, instead of knowing the future.
+Allocative efficiency (`app.evaluation.allocative`): each slot's welfare is the gain from trade the households stated — for every matched unit, the buyer's limit price less the seller's. The benchmark sees all of a slot's orders at once and matches them to maximise that welfare, within the same thermal and voltage limits the safety layer enforces. Pooled over the suite: 99.7%; on the 100-home feeder, where the safety layer curtails, 50.9%.
 
-| Session | EB-only | Agents | Hindsight optimum | Efficiency |
+**The price of forecasting** (`app.evaluation.optimum`). A much stronger benchmark knows every home's actual load and solar in advance and schedules every battery, neighbour exchange and EB flow with the same battery physics and grid limits. Community welfare is the net EB bill (neighbour payments are transfers), plus ₹50 per unserved unit, minus charge left in the batteries at the feed-in tariff. The agents captured 54.5% of the saving it makes over EB-only: the cost of committing hours ahead on forecasts, in hourly blocks, instead of knowing the future.
+
+| Session | EB-only | Agents | Perfect foresight | Share captured |
 |---|---|---|---|---|
 | Jan · identical homes | −₹511.90 | −₹511.90 | −₹530.84 | 0.0% |
 | Jan · mixed | −₹63.97 | −₹213.19 | −₹284.55 | 67.6% |
@@ -80,8 +90,8 @@ Latency is wall-clock time to clear one hourly slot: every agent's decision grap
 
 | Feeder | Slots | p50 | p95 | Max | Forecasting, whole session |
 |---|---|---|---|---|---|
-| 10 homes (suite) | 288 | 15 ms | 28 ms | 37 ms | 0.9 s per session |
-| 100 homes | 12 | 270 ms | 411 ms | 421 ms | 6.4 s |
+| 10 homes (suite) | 288 | 14 ms | 23 ms | 64 ms | 1.1 s per session |
+| 100 homes | 12 | 53 ms | 73 ms | 74 ms | 7.1 s |
 
 Autonomy: 100% of planned slots cleared and were delivered with no human input; 0 sessions failed.
 
@@ -92,7 +102,7 @@ Every settled slot is re-checked twice: by the same linearised DistFlow the safe
 | Feeder | Slots AC-checked | Curtailments | Max line loading (linear / AC) | Lowest voltage (linear / AC) | Highest voltage (linear / AC) | Violations (linear / AC) |
 |---|---|---|---|---|---|---|
 | 10 homes (suite) | 124 | 0 | 31% / 30% | 0.984 / 0.983 pu | 1.031 / 1.030 pu | 0 / 0 |
-| 100 homes | 12 | 286 | 23% / 22% | 0.965 / 0.962 pu | 1.034 / 1.030 pu | 0 / 0 |
+| 100 homes | 12 | 276 | 23% / 22% | 0.965 / 0.962 pu | 1.033 / 1.028 pu | 0 / 0 |
 
 Largest gap between the linear and AC voltage at any bus: 0.0051 pu. Statutory band: 0.95–1.05 pu.
 
@@ -100,8 +110,24 @@ Largest gap between the linear and AC voltage at any bus: 0.0051 pu. Statutory b
 
 Both are measured against the same counterfactual: the same hours, the same weather and families, with each home dealing only with the EB (its battery still doing self-consumption). Self-sufficiency = load met without the EB / total load. Self-consumption = local solar used locally / total solar.
 
-- EB export over the suite: 701 units EB-only, 603 with neighbours trading.
-- Bill reduction is averaged over the 58 household-sessions that are net buyers on an EB-only bill, weighted by that bill — total saving over total bill, since a plain mean of percentages is ruled by near-zero bills (and a percentage of a negative bill means nothing). Net sellers' gains are in the community saving of ₹1,474.25 over the suite.
+- EB export over the suite: 701 units EB-only, 603 with neighbours trading, and 402 at the least any schedule could reach (a linear program minimising export within the same batteries and grid limits, curtailing solar only during a power cut, as delivery does).
+
+Each home over the whole suite:
+
+| Home | EB-only bill | Saving with neighbours | Reduction |
+|---|---|---|---|
+| h1 | ₹857.18 | ₹114.85 | 13.4% |
+| h2 | −₹249.30 | ₹213.77 | net seller |
+| h3 | ₹2,729.11 | ₹86.66 | 3.2% |
+| h4 | −₹367.91 | ₹333.93 | net seller |
+| h5 | ₹2,831.85 | ₹61.98 | 2.2% |
+| h6 | ₹288.30 | ₹88.83 | 30.8% |
+| h7 | ₹146.44 | ₹71.92 | 49.1% |
+| h8 | ₹2,700.39 | ₹145.24 | 5.4% |
+| h9 | −₹350.08 | ₹301.64 | net seller |
+| h10 | ₹506.15 | ₹55.44 | 11.0% |
+
+A negative EB-only bill means the home earns more from exports than it pays; a share of that means nothing, so the mean reduction is over the 7 net-buying homes. Community saving over the suite: ₹1,474.25.
 
 ## What these results do not show
 

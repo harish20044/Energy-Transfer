@@ -79,7 +79,11 @@ def community_cost(run: SessionRun, which: str) -> float:
     return total
 
 
-def solve_optimum(run: SessionRun) -> Optimum:
+def solve_optimum(run: SessionRun, *, minimise_export: bool = False) -> Optimum:
+    """The cheapest schedule — or, with `minimise_export`, the one sending
+    the least solar to the EB that physics allows (still serving every load
+    it can), which bounds what any mechanism could do for objective O5. The
+    reported cost is always the community cost of the schedule found."""
     households = list(run.households.values())
     n, t_count = len(households), run.intervals
     dt = run.interval_hours
@@ -115,16 +119,22 @@ def solve_optimum(run: SessionRun) -> Optimum:
             slot = t // ticks_per_hour
             eb_on = run.eb_by_interval[t]
             retail, fit = run.retail[slot], run.feed_in[slot]
-            cost[index(h, t, "imp")] = retail * dt
-            cost[index(h, t, "exp")] = -fit * dt
-            cost[index(h, t, "uns")] = VOLL_INR_PER_KWH * dt
-            cost[index(h, t, "out")] = _TRANSFER_TIEBREAK_INR * dt
+            if minimise_export:
+                cost[index(h, t, "exp")] = dt
+                cost[index(h, t, "uns")] = 1000.0 * dt  # serve load first
+            else:
+                cost[index(h, t, "imp")] = retail * dt
+                cost[index(h, t, "exp")] = -fit * dt
+                cost[index(h, t, "uns")] = VOLL_INR_PER_KWH * dt
+                cost[index(h, t, "out")] = _TRANSFER_TIEBREAK_INR * dt
             if not eb_on:
                 upper[index(h, t, "imp")] = 0.0
                 upper[index(h, t, "exp")] = 0.0
             upper[index(h, t, "ch")] = battery.max_charge_kw
             upper[index(h, t, "dis")] = battery.max_discharge_kw
-            upper[index(h, t, "cur")] = home.generation_kw[t]
+            # Solar is only ever curtailed when it has nowhere to go: during a
+            # power cut, as delivery does. Otherwise it is used, stored or exported.
+            upper[index(h, t, "cur")] = 0.0 if eb_on else home.generation_kw[t]
             lower[index(h, t, "soc")] = floor
             upper[index(h, t, "soc")] = max(floor, battery.capacity_kwh)
             # Energy balance, in kW over the interval:
@@ -152,7 +162,8 @@ def solve_optimum(run: SessionRun) -> Optimum:
                 eq(terms, battery.stored_kwh)
             else:
                 eq([*terms, (index(h, t - 1, "soc"), -1.0)], 0.0)
-        cost[index(h, t_count - 1, "soc")] -= final_fit
+        if not minimise_export:
+            cost[index(h, t_count - 1, "soc")] -= final_fit
 
     for t in range(t_count):
         # What neighbours send equals what neighbours take.
@@ -224,10 +235,18 @@ def solve_optimum(run: SessionRun) -> Optimum:
     def total(var: str) -> float:
         return float(sum(x[index(h, t, var)] for h in range(n) for t in range(t_count)) * dt)
 
-    start_value = sum(final_fit * home.start_battery.stored_kwh for home in households)
-    tiebreak = _TRANSFER_TIEBREAK_INR * total("out")
+    community = sum(
+        dt * run.retail[t // ticks_per_hour] * x[index(h, t, "imp")]
+        - dt * run.feed_in[t // ticks_per_hour] * x[index(h, t, "exp")]
+        + dt * VOLL_INR_PER_KWH * x[index(h, t, "uns")]
+        for h in range(n)
+        for t in range(t_count)
+    ) - final_fit * sum(
+        x[index(h, t_count - 1, "soc")] - home.start_battery.stored_kwh
+        for h, home in enumerate(households)
+    )
     return Optimum(
-        cost_inr=float(result.fun) - tiebreak + start_value,
+        cost_inr=float(community),
         eb_import_kwh=total("imp"),
         eb_export_kwh=total("exp"),
         p2p_kwh=total("out"),

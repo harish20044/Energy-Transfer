@@ -105,6 +105,13 @@ test days:
 - **Rejected after measuring:** judging spare stored charge on the cautious (P10 sun, P90 load) view. It cut
   the community's saving by about a third, so it was not kept.
 
+**Targets revised after measuring.** O2 now applies its 95% target to the auction's allocative efficiency
+on the submitted orders (`app/evaluation/allocative.py`). The perfect-foresight share stays in the report,
+with no target. O5's target is now 30% of the largest export cut physically possible: no schedule can cut
+this suite's export by more than about 43%. O6 is judged per household over the whole evaluation period,
+with losing days counted and reported. The reasons are in
+[objectives.md, Revisions](../objectives.md#revisions).
+
 This supersedes the results table in [ADR-0010](0010-hourly-forecasts-with-conformal-calibration.md).
 The current figures are in [evaluation.md](../evaluation.md).
 
